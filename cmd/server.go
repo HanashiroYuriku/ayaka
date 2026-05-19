@@ -26,10 +26,10 @@ var serverCmd = &cobra.Command{
 		
 		// Step 2: Set up logger
 		ayaka.SetUp(cfg)	
-		ayaka.Log("SYSTEM", "INFO", "Config & Logger Already Loaded")
+		ayaka.Log("SYSTEM", "INFO", "Config & Logger Already Loaded", "unknown-request-id")
 
 		// Step 3: Run bootstrap
-		ayaka.Log("SYSTEM", "WARN", "Preparing Bootstrap & Fiber")
+		ayaka.Log("SYSTEM", "WARN", "Preparing Bootstrap & Fiber", "unknown-request-id")
 		bootstrap.Run(cfg)
 	},
 }
