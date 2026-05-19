@@ -1,8 +1,8 @@
 package repository_test
 
 import (
-	"github.com/stretchr/testify/suite"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/suite"
 	"gorm.io/gorm"
 )
 
