@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"be-ayaka/internal/core/customerrors"
 	"context"
 	"fmt"
 	"reflect"
@@ -30,7 +31,13 @@ type GoValidator struct {
 // ValidationError is a custom error type for validation errors
 type ValidationError struct {
 	ErrorFields map[string]string `json:"errorFields,omitempty"`
+	IsConflict  bool              `json:"-"`
+	IsNotFound  bool              `json:"-"`
 }
+
+var (
+	usernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
+)
 
 // NewGoValidator creates a new instance of GoValidator with custom validators and messages
 func NewGoValidator(db *gorm.DB) *GoValidator {
@@ -87,19 +94,41 @@ func (v *GoValidator) registerCustomValidators() {
 	v.validate.RegisterValidation("incolumn", v.incolumnValidator)
 	v.validate.RegisterValidation("complexpassword", v.complexPasswordValidator)
 	v.validate.RegisterValidation("whitespace", v.whiteSpaceValidator)
+	v.validate.RegisterValidation("username", v.usernameValidator)
 
-	// Message untuk unique
+	// unique
 	v.validate.RegisterTranslation("unique", v.uni, func(ut ut.Translator) error {
 		return ut.Add("unique", "{0} already exists", true)
 	}, func(ut ut.Translator, fe validator.FieldError) string {
 		return fmt.Sprintf("%s already exists", fe.Value().(string))
 	})
 
-	// Message untuk complexpassword
+	// incolumn
+	v.validate.RegisterTranslation("incolumn", v.uni, func(ut ut.Translator) error {
+		return ut.Add("incolumn", "{0} not found", true)
+	}, func(ut ut.Translator, fe validator.FieldError) string {
+		return fmt.Sprintf("%s does not exists", fe.Value().(string))
+	})
+
+	// complexpassword
 	v.validate.RegisterTranslation("complexpassword", v.uni, func(ut ut.Translator) error {
 		return ut.Add("complexpassword", "{0} not valid", true)
 	}, func(ut ut.Translator, fe validator.FieldError) string {
 		return "Password must be 8-64 characters long, contain: uppercase, lowercase, special character and number"
+	})
+
+	// username
+	v.validate.RegisterTranslation("username", v.uni, func(ut ut.Translator) error {
+		return ut.Add("username", "{0} can only contain letters, numbers, underscores, hyphens, and dots", true)
+	}, func(ut ut.Translator, fe validator.FieldError) string {
+		return fmt.Sprintf("%s can only contain letters, numbers, underscores, hyphens, and dots", toProperCase(fe.Field()))
+	})
+
+	// whitespace
+	v.validate.RegisterTranslation("whitespace", v.uni, func(ut ut.Translator) error {
+		return ut.Add("whitespace", "{0} cannot contain spaces", true)
+	}, func(ut ut.Translator, fe validator.FieldError) string {
+		return fmt.Sprintf("%s cannot contain spaces", toProperCase(fe.Field()))
 	})
 }
 
@@ -114,8 +143,7 @@ func (v *GoValidator) uniqueValidator(fl validator.FieldLevel) bool {
 	fieldName := params[1]
 	fieldValue := fl.Field().String()
 
-	var count int64 // GORM menggunakan int64 untuk Count()
-	// GORM raw table query yang sangat aman dari SQL Injection
+	var count int64
 	err := v.DB.Table(tableName).Where(fmt.Sprintf("%s = ?", fieldName), fieldValue).Count(&count).Error
 	if err != nil {
 		return false
@@ -124,7 +152,7 @@ func (v *GoValidator) uniqueValidator(fl validator.FieldLevel) bool {
 	return count == 0
 }
 
-// incolumnValidator digunakan untuk validasi bahwa nilai yang diberikan harus ada di kolom tertentu di database (mirip dengan "exists" tapi untuk update data agar tidak memvalidasi dirinya sendiri)
+// incolumnValidator
 func (v *GoValidator) incolumnValidator(fl validator.FieldLevel) bool {
 	params := strings.Split(fl.Param(), "->")
 	if len(params) != 2 {
@@ -148,25 +176,46 @@ func (v *GoValidator) incolumnValidator(fl validator.FieldLevel) bool {
 	return count != 0
 }
 
-// complexPasswordValidator digunakan untuk validasi password yang kompleks (8-12 karakter, harus ada huruf besar, huruf kecil, angka, dan karakter khusus)
+// complexPasswordValidator
 func (v *GoValidator) complexPasswordValidator(fl validator.FieldLevel) bool {
 	password := fl.Field().String()
 	if len(password) < 8 || len(password) > 64 {
 		return false
 	}
-	hasLower := regexp.MustCompile(`[a-z]`).MatchString(password)
-	hasUpper := regexp.MustCompile(`[A-Z]`).MatchString(password)
-	hasNumber := regexp.MustCompile(`[0-9]`).MatchString(password)
-	hasSpecial := regexp.MustCompile(`[!@#$%^&*()_\-+={[}\]|\\:;"'<,>.?/~]`).MatchString(password)
+	var hasLower, hasUpper, hasNumber, hasSpecial bool
+	specialChars := `!@#$%^&*()_-+={[}]| \:;"'<,>.?/~`
+
+	for _, r := range password {
+		switch {
+		case unicode.IsLower(r):
+			hasLower = true
+		case unicode.IsUpper(r):
+			hasUpper = true
+		case unicode.IsDigit(r):
+			hasNumber = true
+		case strings.ContainsRune(specialChars, r):
+			hasSpecial = true
+		}
+
+		if hasLower && hasUpper && hasNumber && hasSpecial {
+			return true
+		}
+	}
 	return hasLower && hasUpper && hasNumber && hasSpecial
 }
 
-// whiteSpaceValidator digunakan untuk validasi bahwa string tidak boleh mengandung spasi (baik spasi biasa maupun tab)
+// whiteSpaceValidator
 func (v *GoValidator) whiteSpaceValidator(fl validator.FieldLevel) bool {
 	text := fl.Field().String()
 	return strings.IndexFunc(text, unicode.IsSpace) == -1
 }
 
+// username validator
+func (v *GoValidator) usernameValidator(fl validator.FieldLevel) bool {
+	username := fl.Field().String()
+
+	return usernameRegex.MatchString(username)
+}
 
 // Validate implements the Validator interface, validating the given data and returning a ValidationError if there are any validation errors
 func (v *GoValidator) Validate(ctx context.Context, data interface{}) error {
@@ -182,10 +231,42 @@ func (v *GoValidator) Validate(ctx context.Context, data interface{}) error {
 	validationErrors := err.(validator.ValidationErrors)
 	if len(validationErrors) > 0 {
 		errorFields := make(map[string]string)
+		isConflict := false
+		isNotFound := false
+		hasFormatError := false
+
 		for _, err := range validationErrors {
+			switch err.Tag() {
+			case "unique":
+				isConflict = true
+			case "incolumn":
+				isNotFound = true
+			default:
+				hasFormatError = true
+			}
 			errorFields[err.Field()] = err.Translate(v.uni)
 		}
-		return &ValidationError{ErrorFields: errorFields}
+
+		var errMsgs []string
+		for field, msg := range errorFields {
+			errMsgs = append(errMsgs, fmt.Sprintf("%s: %s", field, msg))
+		}
+		detail := strings.Join(errMsgs, "; ")
+
+		// 422
+		if hasFormatError {
+			return customerrors.NewValidationError(detail)
+		}
+		// 404
+		if isNotFound {
+			return customerrors.NewNotFoundError(detail)
+		}
+		// 409
+		if isConflict {
+			return customerrors.NewConflictError(detail)
+		}
+
+		return customerrors.NewValidationError(detail)
 	}
 	return nil
 }
@@ -217,7 +298,7 @@ func toProperCase(input string) string {
 	for i, word := range words {
 		runes := []rune(word)
 		runes[0] = unicode.ToUpper(runes[0])
-		
+
 		for j := 1; j < len(runes); j++ {
 			runes[j] = unicode.ToLower(runes[j])
 		}
