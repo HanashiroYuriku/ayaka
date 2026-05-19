@@ -2,7 +2,7 @@ package repository
 
 import (
 	"be-ayaka/internal/core/entity"
-	"be-ayaka/internal/core/repository"
+	"be-ayaka/internal/core/port"
 	"errors"
 
 	"gorm.io/gorm"
@@ -12,7 +12,7 @@ type userRepoPostgres struct {
 	db *gorm.DB
 }
 
-func NewUserRepoPostgres(db *gorm.DB) repository.UserRepository {
+func NewUserRepoPostgres(db *gorm.DB) port.UserRepository {
 	return &userRepoPostgres{
 		db: db,
 	}
