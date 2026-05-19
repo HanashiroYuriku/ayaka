@@ -15,6 +15,8 @@ type Config struct {
 	Log      LogConfig      `mapstructure:"log"`
 	Database DatabaseConfig `mapstructure:"database"`
 	JWT      JwtConfig      `mapstructure:"jwt"`
+	Frontend FrontendConfig `mapstructure:"frontend"`
+	Email    EmailConfig    `mapstructure:"email"`
 }
 
 type AppConfig struct {
@@ -45,7 +47,20 @@ type DatabaseConfig struct {
 
 type JwtConfig struct {
 	Secret  string `mapstructure:"secret"`
-	Expired int    `mapstructure:"expired"` // hours
+	Expired int    `mapstructure:"expired"` // minutes
+	RefreshSecret  string `mapstructure:"refresh_secret"`
+	RefreshExpired int    `mapstructure:"refresh_expired"` // minutes
+}
+
+type FrontendConfig struct {
+	URL string `mapstructure:"url"`
+}
+
+type EmailConfig struct {
+	Host string `mapstructure:"host"`
+	Port string `mapstructure:"port"`
+	User string `mapstructure:"user"`
+	Pass string `mapstructure:"pass"`
 }
 
 // LoadConfig loads configuration from file and environment variables
