@@ -1,4 +1,4 @@
-package repository
+package port
 
 import "be-ayaka/internal/core/entity"
 
