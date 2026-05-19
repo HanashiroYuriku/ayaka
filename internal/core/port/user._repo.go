@@ -1,9 +1,12 @@
 package port
 
-import "be-ayaka/internal/core/entity"
+import (
+	"be-ayaka/internal/core/entity"
+	"context"
+)
 
 type UserRepository interface {
-	FindByID(id string) (*entity.User, error)
-	FindByEmail(email string) (*entity.User, error)
-	Create(user *entity.User) error
+	FindByID(ctx context.Context, id string) (*entity.User, error)
+	FindByEmail(ctx context.Context, email string) (*entity.User, error)
+	Create(ctx context.Context, user *entity.User) error
 }
