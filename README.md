@@ -10,6 +10,8 @@ Ayaka is a backend API template developed in the Go programming language, adheri
 * **ORM:** [GORM](https://gorm.io/)
 * **Configuration:** Viper + Godotenv (with Custom Environment Interpolation)
 * **Validation:** Go-Playground Validator v10 (with Custom DB Rules)
+* **Containerization:** [Docker](https://www.docker.com/) & Docker Compose (Multi-stage Alpine Build)
+* **Continuous Integration:** [GitHub Actions](https://github.com/features/actions) (Automated Testing & Linting via SQLite)
 
 ## Core Functional Features
 
@@ -24,6 +26,9 @@ Ayaka is a backend API template developed in the Go programming language, adheri
 ## 📂 Project Structure
 ```text
 be-ayaka/
+├── .github/               # GitHub Actions workflows
+│   └── workflows/
+│       └── ci.yml         # Automated CI pipeline script
 ├── cmd/                   # Application entry point (CLI commands, root.go, server.go)
 ├── config/                # Configuration setup (Viper, Godotenv)
 ├── internal/              # Private application codebase
@@ -45,6 +50,7 @@ be-ayaka/
 ├── pkg/                   # Reusable, domain-agnostic utilities (Hash, JWT, Logger, Validator)
 ├── .env.sample            # Local environment variables template
 ├── Dockerfile             # Multi-stage production Docker build recipe
+├── docker-compose.yml     # Local multi-container orchestration (App + Postgres)
 ├── config.yaml            # Configuration mapping with environment variable interpolation
 ├── TESTING.md             # Guide for running unit tests, integration tests, and generating coverage
 └── main.go                # Application root executing the cmd command processor
@@ -63,7 +69,7 @@ Developers are required to follow this sequence when implementing new features:
 7. **Routing:** Register the endpoint in `internal/bootstrap/routes.go`.
 
 ### Pre-Push Checklist
-Before committing (git commit) and pushing code to the repository (git push), developers must run the following verification suite locally to ensure code quality and build stability:
+Before committing (`git commit`) and pushing code, developers are encouraged to run the verification suite locally. **However, these checks are also automatically enforced by the GitHub Actions CI pipeline on every push and pull request to `main`, `master`, or `dev` branches.**
 ```bash
 # 1. Format code according to official Go standards
 go fmt ./...
@@ -82,7 +88,7 @@ go build
 
 ### How to Use Custom Validators
 This template comes with powerful, database-aware custom validation tags. You can easily apply them to your Data Transfer Object (DTO) structs using the `validate` tag.
-n
+
 **Example Struct:**
 ```go
 package dto
@@ -166,6 +172,28 @@ Check the system status by accessing:
 ```
 GET http://localhost:8000/health
 ```
+
+## Getting Started (Docker Compose - Recommended)
+
+If you don't want to install PostgreSQL or Go manually on your local machine, you can spin up the entire infrastructure (Ayaka Backend + PostgreSQL Database) in an isolated network with a single command:
+
+### 1. Environment Configuration
+Ensure your `.env` file is ready (copied from `.env.sample`). Docker Compose will automatically inject these variables into the container.
+
+### 2. Up and Build
+Run the following command in your terminal:
+```bash
+docker compose up --build
+```
+Docker Compose will automatically:
+
+1. Initialize a localized PostgreSQL 16 Alpine container.
+
+2. Build the lightweight Ayaka Go binary inside an Alpine container.
+
+3. Handle time-zone matching (`Asia/Jakarta`) and bind ports automatically.
+
+4. Once the ASCII Art appears, the system is ready at `GET http://localhost:8000/health`.
 
 ## Credits & Acknowledgements
 
