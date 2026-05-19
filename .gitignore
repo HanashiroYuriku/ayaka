@@ -4,6 +4,11 @@
 # Build Executables
 /main
 *.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+be-ayaka
 *.out
 
 # Logs
