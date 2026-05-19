@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"be-ayaka/pkg/requestid"
 	"be-ayaka/pkg/response"
 
 	"github.com/gofiber/fiber/v2"
@@ -8,11 +9,7 @@ import (
 
 func OnlyRole(allowedRoles ...string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		requestId, ok := c.Locals("request_id").(string)
-
-		if !ok {
-			requestId = c.Get("X-Request-ID", "unknown-request-id")
-		}
+		requestId := requestid.GetRequestID(c)
 
 		userRole, ok := c.Locals("role").(string)
 		if !ok || userRole == "" {
