@@ -1,7 +1,6 @@
 package bootstrap
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -53,11 +52,23 @@ func Run(cfg *config.Config) {
 	<-quit
 	ayaka.Log("SYSTEM", "WARN", "Start Graceful Shutdown process", "unknown-request-id")
 
-	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	if err := app.ShutdownWithTimeout(5 * time.Second); err != nil {
+		ayaka.Log("SYSTEM", "ERROR", fmt.Sprintf("Fiber Shutdown Failed [!]: %v", err), "unknown-request-id")
+	} else {
+		ayaka.Log("SYSTEM", "INFO", "Fiber server stopped cleanly", "unknown-request-id")
+	}
 
-	if err := app.Shutdown(); err != nil {
-		ayaka.Log("SYSTEM", "ERROR", fmt.Sprintf("Graceful Shutdown Failed [!]: %v", err), "unknown-request-id")
+	if db != nil {
+		ayaka.Log("SYSTEM", "INFO", "Closing database connection...", "unknown-request-id")
+		
+		sqlDB, err := db.DB()
+		if err == nil {
+			if err := sqlDB.Close(); err != nil {
+				ayaka.Log("SYSTEM", "ERROR", fmt.Sprintf("Failed to close database: %v", err), "unknown-request-id")
+			} else {
+				ayaka.Log("SYSTEM", "INFO", "Database connection closed successfully", "unknown-request-id")
+			}
+		}
 	}
 
 	ayaka.Log("SYSTEM", "INFO", "🌸 Ayaka Server shutdown complete", "unknown-request-id")
