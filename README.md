@@ -145,7 +145,7 @@ DATABASE_NAME='ayaka_db'
 
 # jwt configuration
 JWT_SECRET='jwt secret code'
-JWT_EXPIRED='24'
+JWT_EXPIRED='24' #minutes
 
 JWT_REFRESH_SECRET='REFRESH_SECRET_KEY'
 JWT_REFRESH_EXPIRED='10080' # minutes
@@ -200,7 +200,7 @@ Docker Compose will automatically:
 
 ## Credits & Acknowledgements
 
-* **Hanashiro Yuriku**
+* **Hanashiro Yuriku | Dionisius Geovanni Caesario**
 * **Gemini** - *AI Pair Programmer*
   Served as a technical consultant and coding assistant, providing architectural insights and collaborative debugging throughout the development journey.
 
