@@ -60,7 +60,7 @@ func Run(cfg *config.Config) {
 
 	if db != nil {
 		ayaka.Log("SYSTEM", "INFO", "Closing database connection...", "unknown-request-id")
-		
+
 		sqlDB, err := db.DB()
 		if err == nil {
 			if err := sqlDB.Close(); err != nil {
