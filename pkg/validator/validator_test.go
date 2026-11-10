@@ -2,6 +2,7 @@ package validator_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"be-ayaka/internal/core/apperror"
@@ -54,7 +55,7 @@ func TestValidate_FormatErrorsReturn422WithFields(t *testing.T) {
 	fields := apperror.As(err).Fields
 	assert.Contains(t, fields, "username")
 	assert.Contains(t, fields, "email")
-	assert.Equal(t, "Password must be 8-64 characters and contain uppercase, lowercase, number and special character", fields["password"])
+	assert.Equal(t, "Password must be 8-64 characters (max 72 bytes) and contain uppercase, lowercase, number and special character", fields["password"])
 }
 
 func TestValidate_UniqueReturnsConflict_IgnoringSoftDeleted(t *testing.T) {
@@ -75,4 +76,26 @@ func TestValidate_UniqueReturnsConflict_IgnoringSoftDeleted(t *testing.T) {
 		Username: "riku", Email: "deleted@mail.com", Password: "P4$$word",
 	})
 	assert.NoError(t, err)
+}
+
+// Regression: 64 characters can exceed bcrypt's 72-byte limit with multi-byte
+// characters, which used to fail at hashing time with a 500.
+func TestValidate_PasswordByteLimit(t *testing.T) {
+	v := validator.New(newDB(t))
+	multiByte := "Aa1!" + strings.Repeat("é", 60) // 64 characters, 124 bytes
+
+	err := v.Validate(context.Background(), &registerPayload{
+		Username: "riku", Email: "riku@mail.com", Password: multiByte,
+	})
+	require.ErrorIs(t, err, apperror.ErrValidation)
+	assert.Contains(t, apperror.As(err).Fields, "password")
+
+	type login struct {
+		Password string `json:"password" validate:"required,maxbytes=72"`
+	}
+	err = v.Validate(context.Background(), &login{Password: multiByte})
+	require.ErrorIs(t, err, apperror.ErrValidation)
+	assert.Equal(t, "Password must be at most 72 bytes long", apperror.As(err).Fields["password"])
+
+	assert.NoError(t, v.Validate(context.Background(), &login{Password: strings.Repeat("a", 72)}))
 }

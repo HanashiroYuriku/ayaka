@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -119,9 +120,10 @@ func (v *GoValidator) registerRules() {
 	}{
 		{"unique", v.unique, "{0} already exists"},
 		{"incolumn", v.inColumn, "{0} does not exist"},
-		{"complexpassword", complexPassword, "{0} must be 8-64 characters and contain uppercase, lowercase, number and special character"},
+		{"complexpassword", complexPassword, "{0} must be 8-64 characters (max 72 bytes) and contain uppercase, lowercase, number and special character"},
 		{"whitespace", noWhitespace, "{0} cannot contain spaces"},
 		{"username", username, "{0} can only contain letters, numbers, underscores, hyphens and dots"},
+		{"maxbytes", maxBytes, "{0} must be at most {1} bytes long"},
 	}
 	for _, r := range rules {
 		_ = v.validate.RegisterValidationCtx(r.tag, r.fn)
@@ -190,9 +192,14 @@ func (v *GoValidator) hasSoftDelete(table string) bool {
 	return has
 }
 
+// MaxPasswordBytes is the bcrypt input limit; longer passwords cannot be hashed.
+const MaxPasswordBytes = 72
+
 func complexPassword(_ context.Context, fl validator.FieldLevel) bool {
 	password := fl.Field().String()
-	if n := len([]rune(password)); n < 8 || n > 64 {
+	// Count characters for the policy, but also bytes: multi-byte characters
+	// could otherwise exceed the bcrypt limit and fail at hashing time.
+	if n := len([]rune(password)); n < 8 || n > 64 || len(password) > MaxPasswordBytes {
 		return false
 	}
 	var lower, upper, digit, special bool
@@ -209,6 +216,15 @@ func complexPassword(_ context.Context, fl validator.FieldLevel) bool {
 		}
 	}
 	return lower && upper && digit && special
+}
+
+// maxbytes=N: the UTF-8 byte length must be <= N (validator's max counts characters).
+func maxBytes(_ context.Context, fl validator.FieldLevel) bool {
+	limit, err := strconv.Atoi(fl.Param())
+	if err != nil {
+		panic(fmt.Sprintf("validator: invalid maxbytes param %q", fl.Param()))
+	}
+	return len(fl.Field().String()) <= limit
 }
 
 func noWhitespace(_ context.Context, fl validator.FieldLevel) bool {
