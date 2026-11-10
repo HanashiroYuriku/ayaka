@@ -26,8 +26,16 @@ database:
 jwt:
   secret: ${JWT_ACCESS_SECRET}
   expired: ${JWT_ACCESS_EXPIRED:15m}
-  refresh_secret: ${JWT_REFRESH_SECRET}
-  refresh_expired: 168h
+auth:
+  refresh_ttl: 168h
+  require_email_verification: true
+  max_failed_logins: 5
+  lockout_duration: 15m
+  password_reset_ttl: 30m
+  email_verification_ttl: 24h
+  email_cooldown: 60s
+email:
+  driver: ${EMAIL_DRIVER:log}
 `
 
 func writeConfig(t *testing.T) string {
@@ -40,7 +48,6 @@ func writeConfig(t *testing.T) string {
 func TestLoad_InterpolatesEnvAndDefaults(t *testing.T) {
 	t.Setenv("SERVER_PORT", "9090")
 	t.Setenv("JWT_ACCESS_SECRET", "access")
-	t.Setenv("JWT_REFRESH_SECRET", "refresh")
 
 	cfg, err := config.Load(writeConfig(t))
 	require.NoError(t, err)
@@ -49,13 +56,14 @@ func TestLoad_InterpolatesEnvAndDefaults(t *testing.T) {
 	assert.Equal(t, 9090, cfg.Server.Port)
 	assert.Equal(t, 5*time.Second, cfg.Server.ReadTimeout)
 	assert.Equal(t, 15*time.Minute, cfg.JWT.Expired)
-	assert.Equal(t, 168*time.Hour, cfg.JWT.RefreshExpired)
+	assert.Equal(t, 168*time.Hour, cfg.Auth.RefreshTTL)
+	assert.True(t, cfg.Auth.RequireEmailVerification)
+	assert.Equal(t, "log", cfg.Email.Driver)
 	assert.Equal(t, []string{"http://a.test", "http://b.test"}, cfg.Server.CORSAllowedOrigins)
 	assert.Empty(t, cfg.Database.Password)
 }
 
 func TestLoad_MissingRequiredEnv(t *testing.T) {
-	t.Setenv("JWT_REFRESH_SECRET", "refresh")
 	os.Unsetenv("JWT_ACCESS_SECRET")
 
 	_, err := config.Load(writeConfig(t))
@@ -64,27 +72,30 @@ func TestLoad_MissingRequiredEnv(t *testing.T) {
 	assert.Contains(t, err.Error(), "JWT_ACCESS_SECRET")
 }
 
-func TestLoad_ProductionRejectsWeakSecrets(t *testing.T) {
+func TestLoad_ProductionRejectsWeakSecretAndLogMailer(t *testing.T) {
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("JWT_ACCESS_SECRET", "short")
-	t.Setenv("JWT_REFRESH_SECRET", "also-short")
 
 	_, err := config.Load(writeConfig(t))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "at least 32 characters")
+	assert.Contains(t, err.Error(), "email.driver=log is not allowed in production")
 }
 
-func TestValidate_RejectsSameSecretsAndBadEnv(t *testing.T) {
+func TestValidate_RejectsInvalidValues(t *testing.T) {
 	cfg := &config.Config{
 		App:    config.AppConfig{Env: "prod"},
 		Server: config.ServerConfig{Port: 8000},
-		JWT:    config.JwtConfig{Secret: "same", RefreshSecret: "same", Expired: time.Minute, RefreshExpired: time.Hour},
+		JWT:    config.JwtConfig{Secret: "x", Expired: time.Minute},
+		Auth:   config.AuthConfig{RefreshTTL: -time.Hour},
+		Email:  config.EmailConfig{Driver: "smtp"},
 	}
 
 	err := cfg.Validate()
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "app.env")
-	assert.Contains(t, err.Error(), "must be different")
+	for _, want := range []string{"app.env", "auth.refresh_ttl", "auth.max_failed_logins", "smtp driver"} {
+		assert.Contains(t, err.Error(), want)
+	}
 }

@@ -44,9 +44,16 @@ database:
 
 jwt:
   secret: ${JWT_ACCESS_SECRET}
-  expired: ${JWT_ACCESS_EXPIRED:15m}
-  refresh_secret: ${JWT_REFRESH_SECRET}
-  refresh_expired: ${JWT_REFRESH_EXPIRED:168h}
+  expired: ${JWT_ACCESS_EXPIRED:15m} # access token lifetime
+
+auth:
+  refresh_ttl: ${AUTH_REFRESH_TTL:168h}         # refresh token lifetime (renewed on each refresh)
+  require_email_verification: ${AUTH_REQUIRE_EMAIL_VERIFICATION:true}
+  max_failed_logins: ${AUTH_MAX_FAILED_LOGINS:5} # failed logins before the account is locked
+  lockout_duration: ${AUTH_LOCKOUT_DURATION:15m}
+  password_reset_ttl: ${AUTH_PASSWORD_RESET_TTL:30m}
+  email_verification_ttl: ${AUTH_EMAIL_VERIFICATION_TTL:24h}
+  email_cooldown: ${AUTH_EMAIL_COOLDOWN:60s}     # min. time between two emails of the same kind
 
 rate_limit:
   auth_max: ${RATE_LIMIT_AUTH_MAX:10}
@@ -54,8 +61,12 @@ rate_limit:
 
 frontend:
   url: ${FRONTEND_URL:"http://localhost:3000"}
+  # pages that receive ?token=... from emails
+  reset_password_path: ${FRONTEND_RESET_PASSWORD_PATH:/reset-password}
+  verify_email_path: ${FRONTEND_VERIFY_EMAIL_PATH:/verify-email}
 
 email:
+  driver: ${EMAIL_DRIVER:log} # smtp | log (log = print emails to the log, development only)
   host: ${SMTP_HOST:"smtp.gmail.com"}
   port: ${SMTP_PORT:"587"}
   user: ${SMTP_USER:""}

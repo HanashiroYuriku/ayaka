@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"be-ayaka/internal/core/apperror"
+	"be-ayaka/internal/core/entity"
 	"be-ayaka/internal/core/model"
 	"be-ayaka/internal/core/service"
 	httpdelivery "be-ayaka/internal/delivery/http"
@@ -37,6 +38,14 @@ func (s *AuthHandlerSuite) SetupTest() {
 	s.app.Post("/auth/register", h.Register)
 	s.app.Post("/auth/login", h.Login)
 	s.app.Post("/auth/refresh", h.Refresh)
+	s.app.Post("/auth/logout", h.Logout)
+	s.app.Post("/auth/password/forgot", h.ForgotPassword)
+	s.app.Post("/auth/password/reset", h.ResetPassword)
+	s.app.Post("/auth/email/verify", h.VerifyEmail)
+	s.app.Post("/auth/email/resend", h.ResendVerification)
+	authed := s.app.Group("", testingutils.FakeAuth("USR-1", entity.RoleUser))
+	authed.Post("/auth/logout-all", h.LogoutAll)
+	authed.Put("/auth/password", h.ChangePassword)
 }
 
 func (s *AuthHandlerSuite) TearDownTest() {
@@ -112,7 +121,9 @@ func (s *AuthHandlerSuite) TestRegister_InternalError_HidesDetails() {
 
 func (s *AuthHandlerSuite) TestLogin_Success() {
 	s.validator.On("Validate", mock.Anything, mock.Anything).Return(nil).Once()
-	s.svc.On("Login", mock.Anything, model.LoginInput{Email: "riku@mail.com", Password: "P4$$word"}).
+	s.svc.On("Login", mock.Anything, mock.MatchedBy(func(in model.LoginInput) bool {
+		return in.Email == "riku@mail.com" && in.Password == "P4$$word" && in.Client.IP != ""
+	})).
 		Return(&model.AuthTokens{
 			AccessToken: "access", RefreshToken: "refresh", TokenType: "Bearer",
 			AccessExpiresAt: time.Now().Add(15 * time.Minute),
@@ -146,7 +157,7 @@ func (s *AuthHandlerSuite) TestLogin_InvalidCredentials_Returns401() {
 
 func (s *AuthHandlerSuite) TestRefresh_InvalidToken_Returns401() {
 	s.validator.On("Validate", mock.Anything, mock.Anything).Return(nil).Once()
-	s.svc.On("Refresh", mock.Anything, "bad-token").Return(nil, service.ErrInvalidToken).Once()
+	s.svc.On("Refresh", mock.Anything, "bad-token", mock.Anything).Return(nil, service.ErrInvalidToken).Once()
 
 	resp, err := s.app.Test(testingutils.MakeJSONRequest(fiber.MethodPost, "/auth/refresh", map[string]string{
 		"refreshToken": "bad-token",
@@ -159,3 +170,89 @@ func (s *AuthHandlerSuite) TestRefresh_InvalidToken_Returns401() {
 type assertError string
 
 func (e assertError) Error() string { return string(e) }
+
+// ============================================================ Logout
+
+func (s *AuthHandlerSuite) TestLogout_Success() {
+	s.validator.On("Validate", mock.Anything, mock.Anything).Return(nil).Once()
+	s.svc.On("Logout", mock.Anything, "rt").Return(nil).Once()
+
+	resp, err := s.app.Test(testingutils.MakeJSONRequest(fiber.MethodPost, "/auth/logout", map[string]string{"refreshToken": "rt"}))
+	s.Require().NoError(err)
+
+	s.Equal(fiber.StatusOK, resp.StatusCode)
+}
+
+func (s *AuthHandlerSuite) TestLogoutAll_UsesAuthenticatedUser() {
+	s.svc.On("LogoutAll", mock.Anything, "USR-1").Return(nil).Once()
+
+	resp, err := s.app.Test(testingutils.MakeJSONRequest(fiber.MethodPost, "/auth/logout-all", nil))
+	s.Require().NoError(err)
+
+	s.Equal(fiber.StatusOK, resp.StatusCode)
+}
+
+// ============================================================ Passwords
+
+func (s *AuthHandlerSuite) TestChangePassword_WrongCurrent_Returns422() {
+	s.validator.On("Validate", mock.Anything, mock.Anything).Return(nil).Once()
+	s.svc.On("ChangePassword", mock.Anything, model.ChangePasswordInput{
+		UserID: "USR-1", CurrentPassword: "old", NewPassword: "New$pass1",
+	}).Return(service.ErrWrongCurrentPassword).Once()
+
+	resp, err := s.app.Test(testingutils.MakeJSONRequest(fiber.MethodPut, "/auth/password", map[string]string{
+		"currentPassword": "old", "newPassword": "New$pass1",
+	}))
+	s.Require().NoError(err)
+
+	s.Equal(fiber.StatusUnprocessableEntity, resp.StatusCode)
+	s.Contains(testingutils.DecodeResponse(s.T(), resp).ErrorField, "currentPassword")
+}
+
+func (s *AuthHandlerSuite) TestForgotPassword_AlwaysGenericResponse() {
+	s.validator.On("Validate", mock.Anything, mock.Anything).Return(nil).Once()
+	s.svc.On("RequestPasswordReset", mock.Anything, "ghost@mail.com").Return(nil).Once()
+
+	resp, err := s.app.Test(testingutils.MakeJSONRequest(fiber.MethodPost, "/auth/password/forgot", map[string]string{
+		"email": " Ghost@Mail.com ",
+	}))
+	s.Require().NoError(err)
+
+	s.Equal(fiber.StatusOK, resp.StatusCode)
+	s.Equal("if the email is registered, a message has been sent", testingutils.DecodeResponse(s.T(), resp).Message)
+}
+
+func (s *AuthHandlerSuite) TestResetPassword_InvalidToken_Returns400() {
+	s.validator.On("Validate", mock.Anything, mock.Anything).Return(nil).Once()
+	s.svc.On("ResetPassword", mock.Anything, model.ResetPasswordInput{Token: "bad", NewPassword: "New$pass1"}).
+		Return(service.ErrInvalidResetToken).Once()
+
+	resp, err := s.app.Test(testingutils.MakeJSONRequest(fiber.MethodPost, "/auth/password/reset", map[string]string{
+		"token": "bad", "newPassword": "New$pass1",
+	}))
+	s.Require().NoError(err)
+
+	s.Equal(fiber.StatusBadRequest, resp.StatusCode)
+}
+
+// ============================================================ Email verification
+
+func (s *AuthHandlerSuite) TestVerifyEmail_Success() {
+	s.validator.On("Validate", mock.Anything, mock.Anything).Return(nil).Once()
+	s.svc.On("VerifyEmail", mock.Anything, "tok").Return(nil).Once()
+
+	resp, err := s.app.Test(testingutils.MakeJSONRequest(fiber.MethodPost, "/auth/email/verify", map[string]string{"token": "tok"}))
+	s.Require().NoError(err)
+
+	s.Equal(fiber.StatusOK, resp.StatusCode)
+}
+
+func (s *AuthHandlerSuite) TestResendVerification_Success() {
+	s.validator.On("Validate", mock.Anything, mock.Anything).Return(nil).Once()
+	s.svc.On("ResendVerification", mock.Anything, "riku@mail.com").Return(nil).Once()
+
+	resp, err := s.app.Test(testingutils.MakeJSONRequest(fiber.MethodPost, "/auth/email/resend", map[string]string{"email": "riku@mail.com"}))
+	s.Require().NoError(err)
+
+	s.Equal(fiber.StatusOK, resp.StatusCode)
+}

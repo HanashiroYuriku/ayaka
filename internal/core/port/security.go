@@ -1,6 +1,8 @@
 package port
 
 import (
+	"time"
+
 	"be-ayaka/internal/core/entity"
 	"be-ayaka/internal/core/model"
 )
@@ -12,11 +14,11 @@ type PasswordHasher interface {
 	Compare(hash, password string) error
 }
 
-// TokenProvider issues and verifies authentication tokens.
+// AccessTokenProvider issues and verifies short-lived access tokens.
 //
 // Parse must return an error matching apperror.ErrUnauthorized when the token
-// is malformed, expired, signed with the wrong key, or of the wrong type.
-type TokenProvider interface {
-	Issue(userID string, role entity.Role) (*model.AuthTokens, error)
-	Parse(token string, typ model.TokenType) (*model.TokenClaims, error)
+// is malformed, expired, signed with the wrong key, or not an access token.
+type AccessTokenProvider interface {
+	Issue(userID string, role entity.Role, sessionID string) (token string, expiresAt time.Time, err error)
+	Parse(token string) (*model.TokenClaims, error)
 }

@@ -146,3 +146,47 @@ func (s *UserRepoSuite) TestList_Empty() {
 	s.NotNil(users)
 	s.Empty(users)
 }
+
+// ============================================================ Account security
+
+func (s *UserRepoSuite) TestRegisterFailedLogin_LocksAtThreshold() {
+	s.seed(newUser("U-1", "riku"))
+	lockUntil := time.Now().Add(15 * time.Minute).UTC().Truncate(time.Second)
+
+	for i := 1; i <= 2; i++ {
+		s.Require().NoError(s.repo.RegisterFailedLogin(s.ctx, "U-1", 3, lockUntil))
+	}
+	u, _ := s.repo.FindByID(s.ctx, "U-1")
+	s.Equal(2, u.FailedLoginAttempts)
+	s.Nil(u.LockedUntil)
+
+	s.Require().NoError(s.repo.RegisterFailedLogin(s.ctx, "U-1", 3, lockUntil))
+	u, _ = s.repo.FindByID(s.ctx, "U-1")
+	s.Equal(0, u.FailedLoginAttempts, "counter resets once locked")
+	s.Require().NotNil(u.LockedUntil)
+	s.True(u.IsLocked(time.Now()))
+}
+
+func (s *UserRepoSuite) TestUpdatePassword_ClearsLockout() {
+	locked := newUser("U-1", "riku")
+	until := time.Now().Add(time.Hour)
+	locked.LockedUntil, locked.FailedLoginAttempts = &until, 3
+	s.seed(locked)
+
+	s.Require().NoError(s.repo.UpdatePassword(s.ctx, "U-1", "NEW-HASH"))
+
+	u, _ := s.repo.FindByID(s.ctx, "U-1")
+	s.Equal("NEW-HASH", u.Password)
+	s.Nil(u.LockedUntil)
+	s.Zero(u.FailedLoginAttempts)
+}
+
+func (s *UserRepoSuite) TestMarkEmailVerified_AndUnknownUser() {
+	s.seed(newUser("U-1", "riku"))
+
+	s.Require().NoError(s.repo.MarkEmailVerified(s.ctx, "U-1", time.Now()))
+	u, _ := s.repo.FindByID(s.ctx, "U-1")
+	s.True(u.IsEmailVerified())
+
+	s.ErrorIs(s.repo.MarkEmailVerified(s.ctx, "ghost", time.Now()), apperror.ErrNotFound)
+}

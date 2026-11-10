@@ -22,7 +22,7 @@ func ok(c *fiber.Ctx) error { return c.SendString("ok") }
 
 // ============================================================ RequireAuth / RequireRole
 
-func newAuthApp(tokens *mocks.TokenProvider, roles ...entity.Role) *fiber.App {
+func newAuthApp(tokens *mocks.AccessTokenProvider, roles ...entity.Role) *fiber.App {
 	app := testingutils.NewTestApp()
 	chain := []fiber.Handler{middleware.RequireAuth(tokens)}
 	if len(roles) > 0 {
@@ -37,10 +37,10 @@ func newAuthApp(tokens *mocks.TokenProvider, roles ...entity.Role) *fiber.App {
 }
 
 func TestRequireAuth(t *testing.T) {
-	tokens := new(mocks.TokenProvider)
-	tokens.On("Parse", "good", model.TokenTypeAccess).
+	tokens := new(mocks.AccessTokenProvider)
+	tokens.On("Parse", "good").
 		Return(&model.TokenClaims{UserID: "USR-1", Role: entity.RoleUser}, nil)
-	tokens.On("Parse", "expired", model.TokenTypeAccess).
+	tokens.On("Parse", "expired").
 		Return(nil, apperror.Unauthorized("token expired"))
 
 	app := newAuthApp(tokens)
@@ -71,9 +71,9 @@ func TestRequireAuth(t *testing.T) {
 }
 
 func TestRequireRole(t *testing.T) {
-	tokens := new(mocks.TokenProvider)
-	tokens.On("Parse", "user", model.TokenTypeAccess).Return(&model.TokenClaims{UserID: "U", Role: entity.RoleUser}, nil)
-	tokens.On("Parse", "admin", model.TokenTypeAccess).Return(&model.TokenClaims{UserID: "A", Role: entity.RoleAdmin}, nil)
+	tokens := new(mocks.AccessTokenProvider)
+	tokens.On("Parse", "user").Return(&model.TokenClaims{UserID: "U", Role: entity.RoleUser}, nil)
+	tokens.On("Parse", "admin").Return(&model.TokenClaims{UserID: "A", Role: entity.RoleAdmin}, nil)
 
 	app := newAuthApp(tokens, entity.RoleAdmin)
 

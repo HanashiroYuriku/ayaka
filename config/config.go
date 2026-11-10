@@ -29,6 +29,7 @@ type Config struct {
 	Log       LogConfig       `mapstructure:"log"`
 	Database  DatabaseConfig  `mapstructure:"database"`
 	JWT       JwtConfig       `mapstructure:"jwt"`
+	Auth      AuthConfig      `mapstructure:"auth"`
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
 	Frontend  FrontendConfig  `mapstructure:"frontend"`
 	Email     EmailConfig     `mapstructure:"email"`
@@ -93,10 +94,21 @@ func (d DatabaseConfig) DSN() string {
 }
 
 type JwtConfig struct {
-	Secret         string        `mapstructure:"secret"`
-	Expired        time.Duration `mapstructure:"expired"`
-	RefreshSecret  string        `mapstructure:"refresh_secret"`
-	RefreshExpired time.Duration `mapstructure:"refresh_expired"`
+	Secret  string        `mapstructure:"secret"`
+	Expired time.Duration `mapstructure:"expired"` // access token lifetime
+}
+
+// AuthConfig controls sessions and account security.
+type AuthConfig struct {
+	// RefreshTTL is the lifetime of a refresh token (sliding: renewed on every refresh).
+	RefreshTTL               time.Duration `mapstructure:"refresh_ttl"`
+	RequireEmailVerification bool          `mapstructure:"require_email_verification"`
+	MaxFailedLogins          int           `mapstructure:"max_failed_logins"`
+	LockoutDuration          time.Duration `mapstructure:"lockout_duration"`
+	PasswordResetTTL         time.Duration `mapstructure:"password_reset_ttl"`
+	EmailVerificationTTL     time.Duration `mapstructure:"email_verification_ttl"`
+	// EmailCooldown is the minimum time between two emails of the same kind to one user.
+	EmailCooldown time.Duration `mapstructure:"email_cooldown"`
 }
 
 type RateLimitConfig struct {
@@ -107,14 +119,19 @@ type RateLimitConfig struct {
 
 type FrontendConfig struct {
 	URL string `mapstructure:"url"`
+	// Paths of the frontend pages that receive ?token=... from emails.
+	ResetPasswordPath string `mapstructure:"reset_password_path"`
+	VerifyEmailPath   string `mapstructure:"verify_email_path"`
 }
 
 type EmailConfig struct {
-	Host string `mapstructure:"host"`
-	Port string `mapstructure:"port"`
-	User string `mapstructure:"user"`
-	Pass string `mapstructure:"pass"`
-	From string `mapstructure:"from"`
+	// Driver is "smtp" (real delivery) or "log" (emails are written to the log; development only).
+	Driver string `mapstructure:"driver"`
+	Host   string `mapstructure:"host"`
+	Port   string `mapstructure:"port"`
+	User   string `mapstructure:"user"`
+	Pass   string `mapstructure:"pass"`
+	From   string `mapstructure:"from"`
 }
 
 // envPattern matches ${NAME} or ${NAME:default}.
@@ -188,15 +205,41 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("server.port must be between 1 and 65535, got %d", c.Server.Port))
 	}
 
-	if c.JWT.Expired <= 0 || c.JWT.RefreshExpired <= 0 {
-		errs = append(errs, errors.New("jwt.expired and jwt.refresh_expired must be positive durations"))
+	if c.JWT.Secret == "" {
+		errs = append(errs, errors.New("jwt.secret is required"))
 	}
-	if c.JWT.Secret == c.JWT.RefreshSecret {
-		errs = append(errs, errors.New("jwt.secret and jwt.refresh_secret must be different"))
+	positive := map[string]time.Duration{
+		"jwt.expired":                 c.JWT.Expired,
+		"auth.refresh_ttl":            c.Auth.RefreshTTL,
+		"auth.lockout_duration":       c.Auth.LockoutDuration,
+		"auth.password_reset_ttl":     c.Auth.PasswordResetTTL,
+		"auth.email_verification_ttl": c.Auth.EmailVerificationTTL,
 	}
+	for name, d := range positive {
+		if d <= 0 {
+			errs = append(errs, fmt.Errorf("%s must be a positive duration", name))
+		}
+	}
+	if c.Auth.MaxFailedLogins < 1 {
+		errs = append(errs, errors.New("auth.max_failed_logins must be at least 1"))
+	}
+
+	switch c.Email.Driver {
+	case "log":
+	case "smtp":
+		if c.Email.Host == "" || c.Email.Port == "" || (c.Email.From == "" && c.Email.User == "") {
+			errs = append(errs, errors.New("email.host, email.port and email.from (or email.user) are required for the smtp driver"))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("email.driver must be smtp|log, got %q", c.Email.Driver))
+	}
+
 	if !c.App.IsDevelopment() {
-		if len(c.JWT.Secret) < minSecretLength || len(c.JWT.RefreshSecret) < minSecretLength {
-			errs = append(errs, fmt.Errorf("jwt secrets must be at least %d characters outside development", minSecretLength))
+		if len(c.JWT.Secret) < minSecretLength {
+			errs = append(errs, fmt.Errorf("jwt.secret must be at least %d characters outside development", minSecretLength))
+		}
+		if c.App.IsProduction() && c.Email.Driver == "log" {
+			errs = append(errs, errors.New("email.driver=log is not allowed in production (it would write reset links to the logs)"))
 		}
 		for _, o := range c.Server.CORSAllowedOrigins {
 			if o == "*" {

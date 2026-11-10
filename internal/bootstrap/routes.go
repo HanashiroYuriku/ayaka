@@ -22,15 +22,24 @@ func RegisterRoutes(app *fiber.App, cfg *config.Config, c *Container) {
 		app.Get("/swagger/*", swagger.HandlerDefault)
 	}
 
+	requireAuth := middleware.RequireAuth(c.AccessTokens)
+
 	// --- API v1
 	v1 := app.Group("/api/v1")
 
 	auth := v1.Group("/auth", middleware.RateLimit(cfg.RateLimit.AuthMax, cfg.RateLimit.AuthWindow))
+	// public
 	auth.Post("/register", c.Auth.Register)
 	auth.Post("/login", c.Auth.Login)
 	auth.Post("/refresh", c.Auth.Refresh)
-
-	requireAuth := middleware.RequireAuth(c.Tokens)
+	auth.Post("/logout", c.Auth.Logout)
+	auth.Post("/password/forgot", c.Auth.ForgotPassword)
+	auth.Post("/password/reset", c.Auth.ResetPassword)
+	auth.Post("/email/verify", c.Auth.VerifyEmail)
+	auth.Post("/email/resend", c.Auth.ResendVerification)
+	// authenticated
+	auth.Post("/logout-all", requireAuth, c.Auth.LogoutAll)
+	auth.Put("/password", requireAuth, c.Auth.ChangePassword)
 
 	users := v1.Group("/users", requireAuth)
 	users.Get("/me", c.User.GetMe)

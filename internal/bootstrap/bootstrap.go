@@ -16,10 +16,11 @@ import (
 
 // App is a fully wired, ready-to-run server.
 type App struct {
-	cfg   *config.Config
-	log   *slog.Logger
-	db    *gorm.DB
-	fiber *fiber.App
+	cfg       *config.Config
+	log       *slog.Logger
+	db        *gorm.DB
+	fiber     *fiber.App
+	container *Container
 }
 
 // Options tweak start-up behaviour.
@@ -51,10 +52,16 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts Options
 		}
 	}
 
-	app := NewFiber(cfg, log)
-	RegisterRoutes(app, cfg, NewContainer(cfg, db, sqlDB))
+	container, err := NewContainer(cfg, db, sqlDB, log)
+	if err != nil {
+		_ = database.Close(db)
+		return nil, err
+	}
 
-	return &App{cfg: cfg, log: log, db: db, fiber: app}, nil
+	app := NewFiber(cfg, log)
+	RegisterRoutes(app, cfg, container)
+
+	return &App{cfg: cfg, log: log, db: db, fiber: app, container: container}, nil
 }
 
 // Run serves HTTP until ctx is cancelled (e.g. SIGINT/SIGTERM) or the
@@ -84,6 +91,13 @@ func (a *App) shutdown() error {
 	a.log.Info("stopping http server", "timeout", a.cfg.Server.ShutdownTimeout)
 	if err := a.fiber.ShutdownWithTimeout(a.cfg.Server.ShutdownTimeout); err != nil {
 		errs = append(errs, fmt.Errorf("shutdown http server: %w", err))
+	}
+
+	// Let background work (e.g. queued emails) finish before closing the DB.
+	waitCtx, cancel := context.WithTimeout(context.Background(), a.cfg.Server.ShutdownTimeout)
+	defer cancel()
+	if err := a.container.Close(waitCtx); err != nil {
+		errs = append(errs, err)
 	}
 
 	if err := database.Close(a.db); err != nil {

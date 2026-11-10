@@ -1,5 +1,25 @@
 basePath: /
 definitions:
+  dto.ChangePasswordRequest:
+    properties:
+      currentPassword:
+        type: string
+      newPassword:
+        example: N3w$ecret
+        type: string
+    required:
+    - currentPassword
+    - newPassword
+    type: object
+  dto.EmailRequest:
+    properties:
+      email:
+        example: hanashiroyuriku@gmail.com
+        maxLength: 100
+        type: string
+    required:
+    - email
+    type: object
   dto.LoginRequest:
     properties:
       email:
@@ -7,7 +27,6 @@ definitions:
         type: string
       password:
         example: P4$$word
-        maxLength: 72
         type: string
     required:
     - email
@@ -34,9 +53,10 @@ definitions:
         example: 42
         type: integer
     type: object
-  dto.RefreshRequest:
+  dto.RefreshTokenRequest:
     properties:
       refreshToken:
+        maxLength: 128
         type: string
     required:
     - refreshToken
@@ -63,6 +83,26 @@ definitions:
     - email
     - password
     - username
+    type: object
+  dto.ResetPasswordRequest:
+    properties:
+      newPassword:
+        example: N3w$ecret
+        type: string
+      token:
+        maxLength: 128
+        type: string
+    required:
+    - newPassword
+    - token
+    type: object
+  dto.TokenRequest:
+    properties:
+      token:
+        maxLength: 128
+        type: string
+    required:
+    - token
     type: object
   dto.TokenResponse:
     properties:
@@ -92,6 +132,9 @@ definitions:
       email:
         example: hanashiroyuriku@gmail.com
         type: string
+      emailVerified:
+        example: false
+        type: boolean
       id:
         example: USR-01932c7e6f2a7c3b9f1d2e3a4b5c6d7e
         type: string
@@ -144,11 +187,70 @@ info:
   title: Ayaka Backend API
   version: "1.0"
 paths:
+  /api/v1/auth/email/resend:
+    post:
+      consumes:
+      - application/json
+      description: Send a new verification link. Always returns 200 so it cannot be
+        used to discover registered emails.
+      parameters:
+      - description: Account email
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.EmailRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "422":
+          description: Validation failed
+          schema:
+            $ref: '#/definitions/response.Response'
+        "429":
+          description: Rate limited
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: Resend verification email
+      tags:
+      - Auth
+  /api/v1/auth/email/verify:
+    post:
+      consumes:
+      - application/json
+      description: Confirm the email address with the token from the verification
+        email.
+      parameters:
+      - description: Verification token
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.TokenRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Invalid or expired token
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: Verify email
+      tags:
+      - Auth
   /api/v1/auth/login:
     post:
       consumes:
       - application/json
-      description: Exchange email and password for an access/refresh token pair.
+      description: Exchange email and password for an access/refresh token pair (starts
+        a new session).
       parameters:
       - description: Login payload
         in: body
@@ -172,6 +274,120 @@ paths:
           description: Invalid credentials
           schema:
             $ref: '#/definitions/response.Response'
+        "403":
+          description: Email not verified
+          schema:
+            $ref: '#/definitions/response.Response'
+        "422":
+          description: Validation failed
+          schema:
+            $ref: '#/definitions/response.Response'
+        "429":
+          description: Rate limited or account temporarily locked
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: Login
+      tags:
+      - Auth
+  /api/v1/auth/logout:
+    post:
+      consumes:
+      - application/json
+      description: Revoke the session the refresh token belongs to. Idempotent. The
+        access token stays valid until it expires (keep it short-lived).
+      parameters:
+      - description: Refresh token of the session
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.RefreshTokenRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "422":
+          description: Validation failed
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: Logout
+      tags:
+      - Auth
+  /api/v1/auth/logout-all:
+    post:
+      description: Revoke every refresh token of the authenticated user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "401":
+          description: Missing or invalid token
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Logout from all devices
+      tags:
+      - Auth
+  /api/v1/auth/password:
+    put:
+      consumes:
+      - application/json
+      description: Change the password of the authenticated user. All sessions are
+        revoked; log in again afterwards.
+      parameters:
+      - description: Passwords
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.ChangePasswordRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "401":
+          description: Missing or invalid token
+          schema:
+            $ref: '#/definitions/response.Response'
+        "422":
+          description: Wrong current password or weak new password
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Change password
+      tags:
+      - Auth
+  /api/v1/auth/password/forgot:
+    post:
+      consumes:
+      - application/json
+      description: Email a password reset link. Always returns 200 so it cannot be
+        used to discover registered emails.
+      parameters:
+      - description: Account email
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.EmailRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
         "422":
           description: Validation failed
           schema:
@@ -180,21 +396,53 @@ paths:
           description: Rate limited
           schema:
             $ref: '#/definitions/response.Response'
-      summary: Login
+      summary: Forgot password
+      tags:
+      - Auth
+  /api/v1/auth/password/reset:
+    post:
+      consumes:
+      - application/json
+      description: Set a new password with the token from the reset email. Unlocks
+        the account and revokes all sessions.
+      parameters:
+      - description: Token and new password
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.ResetPasswordRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Response'
+        "400":
+          description: Invalid or expired token
+          schema:
+            $ref: '#/definitions/response.Response'
+        "422":
+          description: Validation failed
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: Reset password
       tags:
       - Auth
   /api/v1/auth/refresh:
     post:
       consumes:
       - application/json
-      description: Exchange a valid refresh token for a new access/refresh token pair.
+      description: Exchange a refresh token for a new access/refresh token pair. The
+        old refresh token becomes invalid; reusing it revokes the whole session.
       parameters:
       - description: Refresh payload
         in: body
         name: request
         required: true
         schema:
-          $ref: '#/definitions/dto.RefreshRequest'
+          $ref: '#/definitions/dto.RefreshTokenRequest'
       produces:
       - application/json
       responses:
@@ -208,7 +456,7 @@ paths:
                   $ref: '#/definitions/dto.TokenResponse'
               type: object
         "401":
-          description: Invalid or expired refresh token
+          description: Invalid, expired or reused refresh token
           schema:
             $ref: '#/definitions/response.Response'
         "422":
@@ -222,7 +470,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: Create a new user account.
+      description: Create a new user account. A verification link is emailed to the
+        user.
       parameters:
       - description: Register payload
         in: body

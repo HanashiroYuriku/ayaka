@@ -18,25 +18,28 @@ type RegisterInput struct {
 type LoginInput struct {
 	Email    string
 	Password string
+	Client   ClientInfo
 }
 
 type UserProfile struct {
-	ID          string
-	Username    string
-	Email       string
-	DisplayName string
-	Role        entity.Role
-	CreatedAt   time.Time
+	ID            string
+	Username      string
+	Email         string
+	DisplayName   string
+	Role          entity.Role
+	EmailVerified bool
+	CreatedAt     time.Time
 }
 
 // NewUserProfile maps a user entity to its public representation.
 func NewUserProfile(u *entity.User) UserProfile {
 	return UserProfile{
-		ID:          u.ID,
-		Username:    u.Username,
-		Email:       u.Email,
-		DisplayName: u.DisplayName,
-		Role:        u.Role,
-		CreatedAt:   u.CreatedAt,
+		ID:            u.ID,
+		Username:      u.Username,
+		Email:         u.Email,
+		DisplayName:   u.DisplayName,
+		Role:          u.Role,
+		EmailVerified: u.IsEmailVerified(),
+		CreatedAt:     u.CreatedAt,
 	}
 }

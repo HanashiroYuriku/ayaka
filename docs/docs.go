@@ -15,9 +15,95 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/v1/auth/email/resend": {
+            "post": {
+                "description": "Send a new verification link. Always returns 200 so it cannot be used to discover registered emails.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Resend verification email",
+                "parameters": [
+                    {
+                        "description": "Account email",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.EmailRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Validation failed",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Rate limited",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/email/verify": {
+            "post": {
+                "description": "Confirm the email address with the token from the verification email.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Verify email",
+                "parameters": [
+                    {
+                        "description": "Verification token",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.TokenRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid or expired token",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/auth/login": {
             "post": {
-                "description": "Exchange email and password for an access/refresh token pair.",
+                "description": "Exchange email and password for an access/refresh token pair (starts a new session).",
                 "consumes": [
                     "application/json"
                 ],
@@ -64,6 +150,180 @@ const docTemplate = `{
                             "$ref": "#/definitions/response.Response"
                         }
                     },
+                    "403": {
+                        "description": "Email not verified",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Validation failed",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "429": {
+                        "description": "Rate limited or account temporarily locked",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/logout": {
+            "post": {
+                "description": "Revoke the session the refresh token belongs to. Idempotent. The access token stays valid until it expires (keep it short-lived).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Logout",
+                "parameters": [
+                    {
+                        "description": "Refresh token of the session",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.RefreshTokenRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Validation failed",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/logout-all": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Revoke every refresh token of the authenticated user.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Logout from all devices",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid token",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/password": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Change the password of the authenticated user. All sessions are revoked; log in again afterwards.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Change password",
+                "parameters": [
+                    {
+                        "description": "Passwords",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.ChangePasswordRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid token",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Wrong current password or weak new password",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/auth/password/forgot": {
+            "post": {
+                "description": "Email a password reset link. Always returns 200 so it cannot be used to discover registered emails.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Forgot password",
+                "parameters": [
+                    {
+                        "description": "Account email",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.EmailRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
                     "422": {
                         "description": "Validation failed",
                         "schema": {
@@ -79,9 +339,55 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/auth/password/reset": {
+            "post": {
+                "description": "Set a new password with the token from the reset email. Unlocks the account and revokes all sessions.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Reset password",
+                "parameters": [
+                    {
+                        "description": "Token and new password",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.ResetPasswordRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid or expired token",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Validation failed",
+                        "schema": {
+                            "$ref": "#/definitions/response.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/auth/refresh": {
             "post": {
-                "description": "Exchange a valid refresh token for a new access/refresh token pair.",
+                "description": "Exchange a refresh token for a new access/refresh token pair. The old refresh token becomes invalid; reusing it revokes the whole session.",
                 "consumes": [
                     "application/json"
                 ],
@@ -99,7 +405,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/dto.RefreshRequest"
+                            "$ref": "#/definitions/dto.RefreshTokenRequest"
                         }
                     }
                 ],
@@ -123,7 +429,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Invalid or expired refresh token",
+                        "description": "Invalid, expired or reused refresh token",
                         "schema": {
                             "$ref": "#/definitions/response.Response"
                         }
@@ -139,7 +445,7 @@ const docTemplate = `{
         },
         "/api/v1/auth/register": {
             "post": {
-                "description": "Create a new user account.",
+                "description": "Create a new user account. A verification link is emailed to the user.",
                 "consumes": [
                     "application/json"
                 ],
@@ -382,6 +688,35 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "dto.ChangePasswordRequest": {
+            "type": "object",
+            "required": [
+                "currentPassword",
+                "newPassword"
+            ],
+            "properties": {
+                "currentPassword": {
+                    "type": "string"
+                },
+                "newPassword": {
+                    "type": "string",
+                    "example": "N3w$ecret"
+                }
+            }
+        },
+        "dto.EmailRequest": {
+            "type": "object",
+            "required": [
+                "email"
+            ],
+            "properties": {
+                "email": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "example": "hanashiroyuriku@gmail.com"
+                }
+            }
+        },
         "dto.LoginRequest": {
             "type": "object",
             "required": [
@@ -395,7 +730,6 @@ const docTemplate = `{
                 },
                 "password": {
                     "type": "string",
-                    "maxLength": 72,
                     "example": "P4$$word"
                 }
             }
@@ -429,14 +763,15 @@ const docTemplate = `{
                 }
             }
         },
-        "dto.RefreshRequest": {
+        "dto.RefreshTokenRequest": {
             "type": "object",
             "required": [
                 "refreshToken"
             ],
             "properties": {
                 "refreshToken": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 128
                 }
             }
         },
@@ -467,6 +802,35 @@ const docTemplate = `{
                     "maxLength": 20,
                     "minLength": 3,
                     "example": "hanashiroyuriku"
+                }
+            }
+        },
+        "dto.ResetPasswordRequest": {
+            "type": "object",
+            "required": [
+                "newPassword",
+                "token"
+            ],
+            "properties": {
+                "newPassword": {
+                    "type": "string",
+                    "example": "N3w$ecret"
+                },
+                "token": {
+                    "type": "string",
+                    "maxLength": 128
+                }
+            }
+        },
+        "dto.TokenRequest": {
+            "type": "object",
+            "required": [
+                "token"
+            ],
+            "properties": {
+                "token": {
+                    "type": "string",
+                    "maxLength": 128
                 }
             }
         },
@@ -509,6 +873,10 @@ const docTemplate = `{
                 "email": {
                     "type": "string",
                     "example": "hanashiroyuriku@gmail.com"
+                },
+                "emailVerified": {
+                    "type": "boolean",
+                    "example": false
                 },
                 "id": {
                     "type": "string",

@@ -7,7 +7,6 @@ import (
 
 	"be-ayaka/internal/core/apperror"
 	"be-ayaka/internal/core/entity"
-	"be-ayaka/internal/core/model"
 	"be-ayaka/internal/core/port"
 	"be-ayaka/pkg/logger"
 
@@ -20,14 +19,14 @@ var (
 )
 
 // RequireAuth verifies the Bearer access token and stores the identity on the request.
-func RequireAuth(tokens port.TokenProvider) fiber.Handler {
+func RequireAuth(tokens port.AccessTokenProvider) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		scheme, token, ok := strings.Cut(c.Get(fiber.HeaderAuthorization), " ")
 		if !ok || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
 			return errMissingToken
 		}
 
-		claims, err := tokens.Parse(strings.TrimSpace(token), model.TokenTypeAccess)
+		claims, err := tokens.Parse(strings.TrimSpace(token))
 		if err != nil {
 			return err
 		}

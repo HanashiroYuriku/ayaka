@@ -18,7 +18,7 @@ type RegisterRequest struct {
 // same value that will be stored.
 func (r *RegisterRequest) Normalize() {
 	r.Username = strings.TrimSpace(r.Username)
-	r.Email = strings.ToLower(strings.TrimSpace(r.Email))
+	r.Email = normalizeEmail(r.Email)
 	r.DisplayName = strings.TrimSpace(r.DisplayName)
 }
 
@@ -33,19 +33,38 @@ func (r RegisterRequest) ToInput() model.RegisterInput {
 
 type LoginRequest struct {
 	Email    string `json:"email" validate:"required,email" example:"hanashiroyuriku@gmail.com"`
-	Password string `json:"password" validate:"required,max=72" example:"P4$$word"`
+	Password string `json:"password" validate:"required,maxbytes=72" example:"P4$$word"`
 }
 
-func (r *LoginRequest) Normalize() {
-	r.Email = strings.ToLower(strings.TrimSpace(r.Email))
+func (r *LoginRequest) Normalize() { r.Email = normalizeEmail(r.Email) }
+
+func (r LoginRequest) ToInput(client model.ClientInfo) model.LoginInput {
+	return model.LoginInput{Email: r.Email, Password: r.Password, Client: client}
 }
 
-func (r LoginRequest) ToInput() model.LoginInput {
-	return model.LoginInput{Email: r.Email, Password: r.Password}
+// RefreshTokenRequest is used by /auth/refresh and /auth/logout.
+type RefreshTokenRequest struct {
+	RefreshToken string `json:"refreshToken" validate:"required,max=128"`
 }
 
-type RefreshRequest struct {
-	RefreshToken string `json:"refreshToken" validate:"required"`
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword" validate:"required,maxbytes=72"`
+	NewPassword     string `json:"newPassword" validate:"required,complexpassword" example:"N3w$ecret"`
+}
+
+type EmailRequest struct {
+	Email string `json:"email" validate:"required,email,max=100" example:"hanashiroyuriku@gmail.com"`
+}
+
+func (r *EmailRequest) Normalize() { r.Email = normalizeEmail(r.Email) }
+
+type ResetPasswordRequest struct {
+	Token       string `json:"token" validate:"required,max=128"`
+	NewPassword string `json:"newPassword" validate:"required,complexpassword" example:"N3w$ecret"`
+}
+
+type TokenRequest struct {
+	Token string `json:"token" validate:"required,max=128"`
 }
 
 type TokenResponse struct {
@@ -63,7 +82,9 @@ func NewTokenResponse(t *model.AuthTokens) TokenResponse {
 		RefreshToken:     t.RefreshToken,
 		TokenType:        t.TokenType,
 		ExpiresIn:        int64(time.Until(t.AccessExpiresAt).Seconds()),
-		AccessExpiresAt:  t.AccessExpiresAt,
-		RefreshExpiresAt: t.RefreshExpiresAt,
+		AccessExpiresAt:  t.AccessExpiresAt.UTC(),
+		RefreshExpiresAt: t.RefreshExpiresAt.UTC(),
 	}
 }
+
+func normalizeEmail(s string) string { return strings.ToLower(strings.TrimSpace(s)) }

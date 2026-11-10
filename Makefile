@@ -87,6 +87,17 @@ migrate-create: ## Create a migration: make migrate-create name=add_posts_table
 	@test -n "$(name)" || (echo "usage: make migrate-create name=<name>" && exit 1)
 	go run . migrate create $(name)
 
+## ---------- administration
+
+.PHONY: create-admin
+create-admin: ## Create an admin: ADMIN_PASSWORD=... make create-admin email=a@b.c username=admin
+	@test -n "$(email)" -a -n "$(username)" || (echo "usage: ADMIN_PASSWORD=... make create-admin email=<email> username=<username>" && exit 1)
+	go run . user create-admin --email $(email) --username $(username)
+
+.PHONY: tokens-prune
+tokens-prune: ## Delete stale refresh / one-time tokens
+	go run . tokens prune
+
 ## ---------- docker
 
 .PHONY: up

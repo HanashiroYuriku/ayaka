@@ -30,7 +30,7 @@ func Execute() error {
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c", "config.yaml", "path to the config file")
-	rootCmd.AddCommand(serveCmd, migrateCmd)
+	rootCmd.AddCommand(serveCmd, migrateCmd, userCmd, tokensCmd)
 }
 
 // setup loads the configuration and builds the global logger.

@@ -6,79 +6,71 @@ import (
 
 	"be-ayaka/internal/core/apperror"
 	"be-ayaka/internal/core/entity"
-	"be-ayaka/internal/core/model"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func newProvider() *JWTProvider {
 	return NewJWTProvider(Options{
-		Issuer:        "ayaka-test",
-		AccessSecret:  "access-secret-for-tests-only-0123456789",
-		AccessTTL:     15 * time.Minute,
-		RefreshSecret: "refresh-secret-for-tests-only-0123456789",
-		RefreshTTL:    24 * time.Hour,
+		Issuer: "ayaka-test",
+		Secret: "access-secret-for-tests-only-0123456789",
+		TTL:    15 * time.Minute,
 	})
 }
 
 func TestIssueAndParse(t *testing.T) {
 	p := newProvider()
 
-	tokens, err := p.Issue("USR-1", entity.RoleAdmin)
+	tok, exp, err := p.Issue("USR-1", entity.RoleAdmin, "SES-1")
 	require.NoError(t, err)
-	assert.Equal(t, "Bearer", tokens.TokenType)
+	assert.WithinDuration(t, time.Now().Add(15*time.Minute), exp, 2*time.Second)
 
-	access, err := p.Parse(tokens.AccessToken, model.TokenTypeAccess)
+	claims, err := p.Parse(tok)
 	require.NoError(t, err)
-	assert.Equal(t, "USR-1", access.UserID)
-	assert.Equal(t, entity.RoleAdmin, access.Role)
-	assert.NotEmpty(t, access.TokenID)
-
-	refresh, err := p.Parse(tokens.RefreshToken, model.TokenTypeRefresh)
-	require.NoError(t, err)
-	assert.Equal(t, model.TokenTypeRefresh, refresh.Type)
-}
-
-func TestParse_RejectsWrongTokenType(t *testing.T) {
-	p := newProvider()
-	tokens, err := p.Issue("USR-1", entity.RoleUser)
-	require.NoError(t, err)
-
-	// A refresh token must never be usable as an access token (and vice versa).
-	_, err = p.Parse(tokens.RefreshToken, model.TokenTypeAccess)
-	assert.ErrorIs(t, err, apperror.ErrUnauthorized)
-
-	_, err = p.Parse(tokens.AccessToken, model.TokenTypeRefresh)
-	assert.ErrorIs(t, err, apperror.ErrUnauthorized)
+	assert.Equal(t, "USR-1", claims.UserID)
+	assert.Equal(t, entity.RoleAdmin, claims.Role)
+	assert.Equal(t, "SES-1", claims.SessionID)
+	assert.NotEmpty(t, claims.TokenID)
 }
 
 func TestParse_Expired(t *testing.T) {
 	p := newProvider()
 	p.now = func() time.Time { return time.Now().Add(-time.Hour) }
-	tokens, err := p.Issue("USR-1", entity.RoleUser)
+	tok, _, err := p.Issue("USR-1", entity.RoleUser, "SES-1")
 	require.NoError(t, err)
 
 	p.now = time.Now
-	_, err = p.Parse(tokens.AccessToken, model.TokenTypeAccess)
+	_, err = p.Parse(tok)
 	require.ErrorIs(t, err, apperror.ErrUnauthorized)
 	assert.Equal(t, "token expired", apperror.As(err).PublicMessage())
 }
 
-func TestParse_RejectsTamperedAndForeignTokens(t *testing.T) {
+func TestParse_RejectsTamperedForeignAndWrongType(t *testing.T) {
 	p := newProvider()
-	tokens, err := p.Issue("USR-1", entity.RoleUser)
+	tok, _, err := p.Issue("USR-1", entity.RoleUser, "SES-1")
 	require.NoError(t, err)
 
-	_, err = p.Parse(tokens.AccessToken+"x", model.TokenTypeAccess)
-	assert.ErrorIs(t, err, apperror.ErrUnauthorized)
+	_, err = p.Parse(tok + "x")
+	assert.ErrorIs(t, err, apperror.ErrUnauthorized, "tampered signature")
 
-	other := NewJWTProvider(Options{
-		Issuer: "someone-else", AccessSecret: "another-secret-another-secret-0000",
-		AccessTTL: time.Minute, RefreshSecret: "x", RefreshTTL: time.Minute,
-	})
-	foreign, err := other.Issue("USR-1", entity.RoleAdmin)
+	other := NewJWTProvider(Options{Issuer: "someone-else", Secret: "another-secret-another-secret-0000", TTL: time.Minute})
+	foreign, _, err := other.Issue("USR-1", entity.RoleAdmin, "SES-1")
 	require.NoError(t, err)
-	_, err = p.Parse(foreign.AccessToken, model.TokenTypeAccess)
-	assert.ErrorIs(t, err, apperror.ErrUnauthorized)
+	_, err = p.Parse(foreign)
+	assert.ErrorIs(t, err, apperror.ErrUnauthorized, "foreign issuer/secret")
+
+	// A correctly signed token that is not an access token must be rejected.
+	now := time.Now()
+	wrongType, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims{
+		Type: "refresh",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject: "USR-1", Issuer: "ayaka-test",
+			IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(time.Minute)),
+		},
+	}).SignedString([]byte(p.opts.Secret))
+	require.NoError(t, err)
+	_, err = p.Parse(wrongType)
+	assert.ErrorIs(t, err, apperror.ErrUnauthorized, "wrong token type")
 }
