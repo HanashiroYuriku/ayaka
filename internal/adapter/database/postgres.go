@@ -1,52 +1,83 @@
+// Package database opens and configures the PostgreSQL connection pool.
 package database
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"be-ayaka/config"
-	"be-ayaka/internal/core/entity"
-	ayaka "be-ayaka/pkg/logger"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
 
-// NewPostgresConnection creates a new PostgreSQL connection using GORM
-func NewPostgresConnection(cfg *config.Config) *gorm.DB {
-	// build dsn
-	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable TimeZone=Asia/Jakarta",
-		cfg.Database.Host,
-		cfg.Database.Port,
-		cfg.Database.User,
-		cfg.Database.Password,
-		cfg.Database.Name,
-	)
+const (
+	connectAttempts = 5
+	connectBackoff  = 2 * time.Second
+	pingTimeout     = 5 * time.Second
+)
 
-	// open connection
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: gormlogger.Default.LogMode(gormlogger.Error),
+// NewPostgres opens a GORM connection, configures the pool and verifies it,
+// retrying a few times so the app tolerates a database that starts slowly
+// (e.g. docker compose).
+func NewPostgres(ctx context.Context, cfg config.DatabaseConfig, log *slog.Logger) (*gorm.DB, error) {
+	gormLog := gormlogger.NewSlogLogger(log.With("component", "gorm"), gormlogger.Config{
+		SlowThreshold:             cfg.SlowQuery,
+		LogLevel:                  gormlogger.Warn,
+		IgnoreRecordNotFoundError: true,
+		ParameterizedQueries:      true, // never log query parameters (may contain PII)
 	})
 
+	db, err := gorm.Open(postgres.Open(cfg.DSN()), &gorm.Config{
+		Logger:         gormLog,
+		TranslateError: true, // map driver errors to gorm.ErrDuplicatedKey, ...
+		NowFunc:        func() time.Time { return time.Now().UTC() },
+	})
 	if err != nil {
-		ayaka.Log("SYSTEM", "ERROR", fmt.Sprintf("Failed to connect to database: %v", err), "unknown-request-id")
-		panic(fmt.Sprintf("Failed to connect to database: %v", err))
+		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	ayaka.Log("SYSTEM", "INFOR", "Success connect to database!", "unknown-request-id")
-
-	// auto migrate
-	err = db.AutoMigrate(
-		&entity.User{},
-		// db.AutoMigrate(&entity.AuditLog{}) // Uncomment this line to enable auto-migration for the AuditLog table
-		// add other table
-	)
-
+	sqlDB, err := db.DB()
 	if err != nil {
-		ayaka.Log("DATABASE", "ERROR", fmt.Sprintf("Failed to migrate database: %v", err), "unknown-request-id")
-	} else {
-		ayaka.Log("DATABASE", "INFO", "Database Migration Successful!", "unknown-request-id")
+		return nil, fmt.Errorf("get sql.DB: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+	sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+	sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	sqlDB.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+
+	for attempt := 1; ; attempt++ {
+		pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
+		err = sqlDB.PingContext(pingCtx)
+		cancel()
+		if err == nil {
+			break
+		}
+		if attempt == connectAttempts {
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("ping database after %d attempts: %w", attempt, err)
+		}
+		log.Warn("database not ready, retrying", "attempt", attempt, "error", err)
+		select {
+		case <-ctx.Done():
+			_ = sqlDB.Close()
+			return nil, ctx.Err()
+		case <-time.After(connectBackoff * time.Duration(attempt)):
+		}
 	}
 
-	return db
+	log.Info("database connected", "host", cfg.Host, "name", cfg.Name)
+	return db, nil
+}
+
+// Close closes the underlying connection pool.
+func Close(db *gorm.DB) error {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
 }

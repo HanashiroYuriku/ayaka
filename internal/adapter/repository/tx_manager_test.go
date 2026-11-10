@@ -1,89 +1,78 @@
 package repository_test
 
 import (
-	"be-ayaka/internal/adapter/repository"
-	"be-ayaka/internal/core/entity"
-	"be-ayaka/internal/core/port"
 	"context"
 	"errors"
 	"testing"
 
+	"be-ayaka/internal/adapter/repository"
+	"be-ayaka/internal/core/apperror"
+	"be-ayaka/internal/core/entity"
+
 	"github.com/stretchr/testify/suite"
-	"gorm.io/gorm"
 )
 
 type TxManagerSuite struct {
 	BaseRepoSuite
-	manager port.TxManager
-}
-
-func (s *TxManagerSuite) SetupSuite() {
-	s.BaseRepoSuite.SetupSuite()
-	s.manager = repository.NewTxManager(s.DB)
+	tx    *repository.TxManager
+	users *repository.UserRepo
 }
 
 func TestTxManagerSuite(t *testing.T) {
-	suite.Run(t, &TxManagerSuite{
-		BaseRepoSuite: NewBaseRepoSuite(&entity.User{}),
-	})
+	suite.Run(t, &TxManagerSuite{BaseRepoSuite: NewBaseRepoSuite(&entity.User{})})
 }
 
-// =============================================================================
-// 1. success scenario
-// =============================================================================
-func (s *TxManagerSuite) TestWithTx_SuccessCommit() {
+func (s *TxManagerSuite) SetupTest() {
+	s.BaseRepoSuite.SetupTest()
+	s.tx = repository.NewTxManager(s.DB)
+	s.users = repository.NewUserRepo(s.DB)
+}
+
+func newUser(id, username string) *entity.User {
+	u := &entity.User{Username: username, Email: username + "@mail.com", Password: "x", Role: entity.RoleUser}
+	u.ID = id
+	return u
+}
+
+func (s *TxManagerSuite) TestWithTx_Commit() {
 	ctx := context.Background()
 
-	err := s.manager.WithTx(ctx, func(txCtx context.Context) error {
-		// Pastikan ExtractTx berhasil mengambil instance transaksi dari context
-		txDB := repository.ExtractTx(txCtx, s.DB)
-
-		dummyUser := &entity.User{Username: "tx_commit_user"}
-		dummyUser.ID = "TX-COMMIT-123"
-
-		return txDB.Create(dummyUser).Error
+	err := s.tx.WithTx(ctx, func(ctx context.Context) error {
+		return s.users.Create(ctx, newUser("U-1", "commit"))
 	})
 
+	s.Require().NoError(err)
+	_, err = s.users.FindByID(ctx, "U-1")
 	s.NoError(err)
-
-	var res entity.User
-	errFind := s.DB.First(&res, "id = ?", "TX-COMMIT-123").Error
-	s.NoError(errFind)
-	s.Equal("tx_commit_user", res.Username)
 }
 
-// =============================================================================
-// 2. failed scenario
-// =============================================================================
-func (s *TxManagerSuite) TestWithTx_ForcedRollback() {
+func (s *TxManagerSuite) TestWithTx_RollbackOnError() {
 	ctx := context.Background()
-	forcedError := errors.New("simulated database error")
+	forced := errors.New("simulated failure")
 
-	err := s.manager.WithTx(ctx, func(txCtx context.Context) error {
-		txDB := repository.ExtractTx(txCtx, s.DB)
-
-		dummyUser := &entity.User{Username: "tx_rollback_user"}
-		dummyUser.ID = "TX-ROLLBACK-123"
-
-		txDB.Create(dummyUser)
-
-		return forcedError
+	err := s.tx.WithTx(ctx, func(ctx context.Context) error {
+		s.Require().NoError(s.users.Create(ctx, newUser("U-2", "rollback")))
+		return forced
 	})
 
-	s.ErrorIs(err, forcedError)
-
-	var res entity.User
-	errFind := s.DB.First(&res, "id = ?", "TX-ROLLBACK-123").Error
-	s.ErrorIs(errFind, gorm.ErrRecordNotFound)
+	s.ErrorIs(err, forced)
+	_, err = s.users.FindByID(ctx, "U-2")
+	s.ErrorIs(err, apperror.ErrNotFound)
 }
 
-// =============================================================================
-// 3. ExtractTx returns default DB when no transaction in context
-// =============================================================================
-func (s *TxManagerSuite) TestExtractTx_ReturnDefaultDB() {
+func (s *TxManagerSuite) TestWithTx_NestedCallsShareTransaction() {
 	ctx := context.Background()
+	forced := errors.New("outer failure")
 
-	db := repository.ExtractTx(ctx, s.DB)
+	err := s.tx.WithTx(ctx, func(ctx context.Context) error {
+		inner := s.tx.WithTx(ctx, func(ctx context.Context) error {
+			return s.users.Create(ctx, newUser("U-3", "nested"))
+		})
+		s.Require().NoError(inner)
+		return forced
+	})
 
-	s.Equal(s.DB, db)
+	s.ErrorIs(err, forced)
+	_, err = s.users.FindByID(ctx, "U-3")
+	s.ErrorIs(err, apperror.ErrNotFound, "inner write must roll back with the outer transaction")
 }

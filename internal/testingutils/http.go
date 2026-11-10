@@ -2,6 +2,7 @@ package testingutils
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -34,7 +35,7 @@ func MakeJSONRequest(method, path string, body interface{}, opts ...RequestOptio
 		}
 	}
 
-	req, _ := http.NewRequest(method, path, bodyReader)
+	req, _ := http.NewRequestWithContext(context.Background(), method, path, bodyReader)
 	req.Host = "localhost"
 	req.Header.Set("Content-Type", "application/json")
 

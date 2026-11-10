@@ -1,100 +1,75 @@
 package http
 
 import (
-	"be-ayaka/internal/core/customerrors"
+	"be-ayaka/internal/core/apperror"
 	"be-ayaka/internal/core/service"
 	"be-ayaka/internal/delivery/http/dto"
-	"be-ayaka/pkg/logger"
-	"be-ayaka/pkg/requestid"
+	"be-ayaka/internal/middleware"
 	"be-ayaka/pkg/response"
 	"be-ayaka/pkg/validator"
-	"fmt"
 
 	"github.com/gofiber/fiber/v2"
 )
 
 type UserHandler struct {
-	userService service.UserService
-	validator   validator.Validator
+	users     service.UserService
+	validator validator.Validator
 }
 
-func NewUserHandler(userService service.UserService, validator validator.Validator) *UserHandler {
-	return &UserHandler{
-		userService: userService,
-		validator:   validator,
-	}
+func NewUserHandler(users service.UserService, v validator.Validator) *UserHandler {
+	return &UserHandler{users: users, validator: v}
 }
 
-// RegisterUser register new user
-// @Summary Register new User
-// @Description Register new user using email, username, and password
-// @Tags Authentication
-// @Accept json
-// @Produce json
-// @Param request body entity.UserRequest true "Payload Register"
-// @Success 200 {object} response.Response{nil}
-// @Failure 400 {object} response.Response
-// @Failure 422 {object} response.Response "Validation Failed"
-// @Router /api/v1/auth/register [post]
-func (h *UserHandler) RegisterUser(c *fiber.Ctx) error {
-	requestId := requestid.GetRequestID(c)
-
-	var request dto.UserRequest
-
-	if err := c.BodyParser(&request); err != nil {
-		go logger.Log("SYSTEM", "ERROR", "Failed to parse request body: "+err.Error(), requestId)
-		return customerrors.ErrBadRequest
-	}
-
-	if err := h.validator.Validate(c.Context(), &request); err != nil {
-		go logger.Log("SYSTEM", "WARN", "Validation failed: "+err.Error(), requestId)
-		return err
-	}
-
-	if err := h.userService.Create(c.Context(), &request); err != nil {
-		go logger.Log("SYSTEM", "ERROR", "Internal Server Error: "+err.Error(), requestId)
-		return err
-	}
-
-	go logger.Log("SYSTEM", "INFO", fmt.Sprintf("User %s created successfully", request.Username), requestId)
-	return c.Status(fiber.StatusCreated).JSON(
-		response.NewSuccessResponse(
-			response.StatusSuccess,
-			"Success Create User",
-			nil,
-			requestId,
-		),
-	)
-}
-
-// GetProfile retrieves the profile of the authenticated user
-// @Summary Get User Profile
-// @Description Retrieve the profile information of the authenticated user
-// @Tags Authentication
-// @Accept json
-// @Produce json
-// @Param request body dto.UserRequest true "Payload Register"
-// @Success 200 {object} response.Response{data=dto.UserResponse}
-// @Failure 404 {object} response.Response "Profile not found"
-// @Router /api/v1/auth/profile [get]
-func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
-	userID := c.Locals("userID").(string)
-	requestId, ok := c.Locals("request_id").(string)
+// GetMe returns the profile of the authenticated user.
+//
+//	@Summary		Current user
+//	@Description	Get the profile of the authenticated user.
+//	@Tags			Users
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Success		200	{object}	response.Response{data=dto.UserResponse}
+//	@Failure		401	{object}	response.Response	"Missing or invalid token"
+//	@Failure		404	{object}	response.Response	"User not found"
+//	@Router			/api/v1/users/me [get]
+func (h *UserHandler) GetMe(c *fiber.Ctx) error {
+	userID, ok := middleware.UserID(c)
 	if !ok {
-		requestId = c.Get("X-Request-ID", "unknown-request-id")
+		return apperror.ErrUnauthorized
 	}
 
-	userEntity, err := h.userService.GetProfile(c.Context(), userID)
+	profile, err := h.users.GetProfile(c.UserContext(), userID)
 	if err != nil {
-		logger.Log("SYSTEM", "ERROR", fmt.Sprintf("Failed to retrieve user profile for userID %s: %v", userID, err), requestId)
 		return err
 	}
 
-	go logger.Log("SYSTEM", "INFO", fmt.Sprintf("User profile for %s retrieved successfully", userEntity.Username), requestId)
-	return c.Status(fiber.StatusOK).JSON(response.NewSuccessResponse(
-		response.StatusSuccess,
-		"Profile retrieved successfully",
-		userEntity,
-		requestId,
-	))
+	return c.JSON(response.Success("profile retrieved", dto.NewUserResponse(*profile), middleware.RequestID(c)))
+}
+
+// List returns a paginated list of users (admin only).
+//
+//	@Summary		List users
+//	@Description	Paginated list of users, newest first. Requires the admin role.
+//	@Tags			Users
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			page		query		int	false	"Page number"	minimum(1)	default(1)
+//	@Param			pageSize	query		int	false	"Page size"		minimum(1)	maximum(100)	default(20)
+//	@Success		200			{object}	response.Response{data=[]dto.UserResponse,meta=dto.PaginationMeta}
+//	@Failure		401			{object}	response.Response	"Missing or invalid token"
+//	@Failure		403			{object}	response.Response	"Not an admin"
+//	@Failure		422			{object}	response.Response	"Invalid pagination parameters"
+//	@Router			/api/v1/users [get]
+func (h *UserHandler) List(c *fiber.Ctx) error {
+	var q dto.PaginationQuery
+	if err := bindQuery(c, h.validator, &q); err != nil {
+		return err
+	}
+
+	page, err := h.users.List(c.UserContext(), q.ToPageRequest())
+	if err != nil {
+		return err
+	}
+
+	items, meta := dto.NewPaginated(page, dto.NewUserResponse)
+	return c.JSON(response.SuccessWithMeta("users retrieved", items, meta, middleware.RequestID(c)))
 }

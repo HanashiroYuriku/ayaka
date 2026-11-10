@@ -1,16 +1,31 @@
+# Values use the ${ENV_NAME:default} syntax.
+# - ${ENV_NAME}          -> required, startup fails if the variable is not set
+# - ${ENV_NAME:default}  -> optional, falls back to the default
+# Durations use Go syntax: 30s, 15m, 24h, 168h ...
+
 app:
   name: ${APP_NAME:"Ayaka Backend"}
   version: ${APP_VERSION:"v1.0.0"}
-  env: ${APP_ENV:"development"}
+  env: ${APP_ENV:development} # development | staging | production
 
 server:
-  port: ${HTTP_PORT:8000}
+  port: ${SERVER_PORT:8000}
+  read_timeout: ${SERVER_READ_TIMEOUT:10s}
+  write_timeout: ${SERVER_WRITE_TIMEOUT:10s}
+  idle_timeout: ${SERVER_IDLE_TIMEOUT:60s}
+  shutdown_timeout: ${SERVER_SHUTDOWN_TIMEOUT:10s}
+  body_limit_mb: ${SERVER_BODY_LIMIT_MB:4}
+  cors_allowed_origins: ${CORS_ALLOWED_ORIGINS:"http://localhost:3000"} # comma separated
+  enable_swagger: ${SWAGGER_ENABLED:true}
+  trusted_proxies: ${TRUSTED_PROXIES:""} # comma separated, e.g. 10.0.0.1,10.0.0.2
 
 log:
-  file_path: "logs/app.log"
-  max_size: 10
+  level: ${LOG_LEVEL:info}   # debug | info | warn | error
+  format: ${LOG_FORMAT:json} # json | text
+  file_path: ${LOG_FILE_PATH:""} # empty = stdout only (recommended for containers)
+  max_size: 10   # MB
   max_backups: 5
-  max_age: 30
+  max_age: 30    # days
   compress: true
 
 database:
@@ -19,12 +34,23 @@ database:
   user: ${DATABASE_USER:postgres}
   pass: ${DATABASE_PASS:""}
   name: ${DATABASE_NAME:ayaka_db}
+  sslmode: ${DATABASE_SSLMODE:disable}
+  timezone: ${DATABASE_TIMEZONE:UTC}
+  max_open_conns: ${DATABASE_MAX_OPEN_CONNS:25}
+  max_idle_conns: ${DATABASE_MAX_IDLE_CONNS:10}
+  conn_max_lifetime: ${DATABASE_CONN_MAX_LIFETIME:30m}
+  conn_max_idle_time: ${DATABASE_CONN_MAX_IDLE_TIME:5m}
+  slow_query_threshold: ${DATABASE_SLOW_QUERY:200ms}
 
 jwt:
-  secret: ${JWT_ACCESS_SECRET:"secret_default"}
-  expired: ${JWT_ACCESS_EXPIRED:24}
-  refresh_secret: ${JWT_REFRESH_SECRET:"refresh_secret_default"}
-  refresh_expired: ${JWT_REFRESH_EXPIRED:1440}
+  secret: ${JWT_ACCESS_SECRET}
+  expired: ${JWT_ACCESS_EXPIRED:15m}
+  refresh_secret: ${JWT_REFRESH_SECRET}
+  refresh_expired: ${JWT_REFRESH_EXPIRED:168h}
+
+rate_limit:
+  auth_max: ${RATE_LIMIT_AUTH_MAX:10}
+  auth_window: ${RATE_LIMIT_AUTH_WINDOW:1m}
 
 frontend:
   url: ${FRONTEND_URL:"http://localhost:3000"}
@@ -34,3 +60,4 @@ email:
   port: ${SMTP_PORT:"587"}
   user: ${SMTP_USER:""}
   pass: ${SMTP_PASS:""}
+  from: ${SMTP_FROM:""}

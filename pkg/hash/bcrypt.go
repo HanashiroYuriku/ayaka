@@ -1,27 +1,45 @@
+// Package hash provides password hashing.
 package hash
 
 import (
+	"errors"
+
 	"golang.org/x/crypto/bcrypt"
 )
 
-type HashService interface {
-	HashPassword(password string) (string, error)
-	ComparePassword(hashedPassword string, password string) error
+// DefaultCost balances security and latency (~250ms on modern hardware).
+const DefaultCost = 12
+
+// Bcrypt hashes passwords with bcrypt. It satisfies port.PasswordHasher.
+type Bcrypt struct {
+	cost int
 }
 
-type bcryptHash struct{}
-
-func NewBcryptHash() HashService {
-	return &bcryptHash{}
+// NewBcrypt creates a bcrypt hasher. A cost of 0 uses DefaultCost.
+func NewBcrypt(cost int) *Bcrypt {
+	if cost == 0 {
+		cost = DefaultCost
+	}
+	return &Bcrypt{cost: cost}
 }
 
-// hash text
-func (h *bcryptHash) HashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 12)
-	return string(bytes), err
+// Hash returns the bcrypt hash of password.
+// bcrypt only supports up to 72 bytes; longer inputs return bcrypt.ErrPasswordTooLong.
+func (b *Bcrypt) Hash(password string) (string, error) {
+	out, err := bcrypt.GenerateFromPassword([]byte(password), b.cost)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
-// compare text and hash
-func (h *bcryptHash) ComparePassword(hashedPassword string, password string) error {
-	return bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
+// Compare returns nil when password matches the hash.
+func (b *Bcrypt) Compare(hash, password string) error {
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+		return ErrMismatch
+	}
+	return err
 }
+
+var ErrMismatch = errors.New("password does not match")

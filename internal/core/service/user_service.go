@@ -3,69 +3,44 @@ package service
 import (
 	"context"
 
-	"be-ayaka/internal/core/customerrors"
 	"be-ayaka/internal/core/entity"
+	"be-ayaka/internal/core/model"
 	"be-ayaka/internal/core/port"
-	"be-ayaka/internal/delivery/http/dto"
-	"be-ayaka/pkg/generateid"
-	"be-ayaka/pkg/hash"
 )
 
-// UserService defines the interface for user-related business logic
+// UserService handles user related use cases.
 type UserService interface {
-	Create(ctx context.Context, user *dto.UserRequest) error
-	GetProfile(ctx context.Context, userID string) (*dto.UserResponse, error)
+	GetProfile(ctx context.Context, userID string) (*model.UserProfile, error)
+	List(ctx context.Context, page model.PageRequest) (*model.Page[model.UserProfile], error)
 }
 
-// userServiceImpl is the concrete implementation of UserService
-type userServiceImpl struct {
-	userRepo    port.UserRepository
-	hashService hash.HashService
-	txManager   port.TxManager
-	// Add other repositories if needed
+type userService struct {
+	users port.UserRepository
 }
 
-func NewUserService(repo port.UserRepository, hashService hash.HashService, txManager port.TxManager) UserService {
-	return &userServiceImpl{
-		userRepo:    repo,
-		hashService: hashService,
-		txManager:   txManager, //tx manager for handle transaction
-	}
+func NewUserService(users port.UserRepository) UserService {
+	return &userService{users: users}
 }
 
-func (s *userServiceImpl) Create(ctx context.Context, user *dto.UserRequest) error {
-	passwordHash, err := s.hashService.HashPassword(user.Password)
-	if err != nil {
-		return customerrors.ErrFailHash
-	}
-
-	userModel := &entity.User{
-		Username: user.Username,
-		Email:    user.Email,
-		Password: passwordHash,
-		Role:     "user",
-	}
-	userModel.ID = generateid.GenerateID("USER")
-
-	// tx manager implementation example
-	return s.txManager.WithTx(ctx, func(ctx context.Context) error {
-		if err := s.userRepo.Create(ctx, userModel); err != nil {
-			return err
-		}
-
-		return nil
-	})
-}
-
-func (s *userServiceImpl) GetProfile(ctx context.Context, userID string) (*dto.UserResponse, error) {
-	user, err := s.userRepo.FindByID(ctx, userID)
+func (s *userService) GetProfile(ctx context.Context, userID string) (*model.UserProfile, error) {
+	user, err := s.users.FindByID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	return &dto.UserResponse{
-		ID:       user.ID,
-		Username: user.Username,
-		Email:    user.Email,
-		Role:     user.Role,
-	}, nil
+	profile := model.NewUserProfile(user)
+	return &profile, nil
+}
+
+func (s *userService) List(ctx context.Context, req model.PageRequest) (*model.Page[model.UserProfile], error) {
+	req = req.Normalize()
+
+	users, total, err := s.users.List(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	page := model.MapPage(model.NewPage(users, total, req), func(u entity.User) model.UserProfile {
+		return model.NewUserProfile(&u)
+	})
+	return &page, nil
 }

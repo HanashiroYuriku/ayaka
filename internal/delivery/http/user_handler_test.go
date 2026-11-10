@@ -1,15 +1,14 @@
 package http_test
 
 import (
-	"be-ayaka/internal/core/customerrors"
-	httpDelivery "be-ayaka/internal/delivery/http"
-	"be-ayaka/internal/delivery/http/dto"
-	"be-ayaka/internal/middleware"
-	"be-ayaka/internal/testingutils"
-	mocksPkg "be-ayaka/internal/testingutils/mocks/pkg"
-	mocksService "be-ayaka/internal/testingutils/mocks/service"
-	"errors"
 	"testing"
+
+	"be-ayaka/internal/core/apperror"
+	"be-ayaka/internal/core/entity"
+	"be-ayaka/internal/core/model"
+	httpdelivery "be-ayaka/internal/delivery/http"
+	"be-ayaka/internal/testingutils"
+	"be-ayaka/internal/testingutils/mocks"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/stretchr/testify/mock"
@@ -18,163 +17,80 @@ import (
 
 type UserHandlerSuite struct {
 	suite.Suite
-	app           *fiber.App
-	mockService   *mocksService.MockUserService
-	mockValidator *mocksPkg.MockValidator
-	handler       *httpDelivery.UserHandler
-}
-
-func (s *UserHandlerSuite) SetupTest() {
-	s.app = fiber.New(fiber.Config{
-		ErrorHandler: middleware.GlobalErrorHandler,
-	})
-	s.mockService = new(mocksService.MockUserService)
-	s.mockValidator = new(mocksPkg.MockValidator)
-	s.handler = httpDelivery.NewUserHandler(s.mockService, s.mockValidator)
-
-	api := s.app.Group("/api/v1")
-	api.Use(testingutils.MockAuthMiddleware("USER-123"))
-
-	api.Post("/auth/register", s.handler.RegisterUser)
-	api.Get("/users/profile", s.handler.GetProfile)
-	// add more routes if needed
+	app       *fiber.App
+	svc       *mocks.UserService
+	validator *mocks.Validator
 }
 
 func TestUserHandlerSuite(t *testing.T) {
 	suite.Run(t, new(UserHandlerSuite))
 }
 
-// ///////////////// TEST REGISTER USER ///////////////////
-// 1. success scenario
-func (s *UserHandlerSuite) TestRegisterUser_Success() {
-	requestBody := dto.UserRequest{
-		Username:    "riku",
-		Email:       "riku@mail.com",
-		DisplayName: "Riku",
-		Password:    "P4$$w0rd",
-	}
+func (s *UserHandlerSuite) SetupTest() {
+	s.svc = new(mocks.UserService)
+	s.validator = new(mocks.Validator)
+	h := httpdelivery.NewUserHandler(s.svc, s.validator)
 
-	s.mockValidator.On("Validate", mock.Anything, mock.Anything).Return(nil).Once()
-	s.mockService.On("Create", mock.Anything, mock.Anything).Return(nil).Once()
-
-	resp, err := s.app.Test(testingutils.MakeJSONRequest("POST", "/api/v1/auth/register", requestBody))
-
-	s.Require().NoError(err)
-	s.Equal(fiber.StatusCreated, resp.StatusCode)
-
-	s.mockValidator.AssertExpectations(s.T())
-	s.mockService.AssertExpectations(s.T())
+	s.app = testingutils.NewTestApp()
+	s.app.Get("/public/me", h.GetMe) // no auth middleware on purpose
+	authed := s.app.Group("/users", testingutils.FakeAuth("USR-1", entity.RoleAdmin))
+	authed.Get("/me", h.GetMe)
+	authed.Get("/", h.List)
 }
 
-// 2. failed scenario: bad request
-func (s *UserHandlerSuite) TestRegisterUser_Failed_BadRequest() {
-	body := []byte(`{"username": "riku", "email": "riku@mail.com"`)
-
-	resp, err := s.app.Test(testingutils.MakeJSONRequest("POST", "/api/v1/auth/register", body))
-
-	s.Require().NoError(err)
-	s.Equal(fiber.StatusBadRequest, resp.StatusCode)
-
-	s.mockValidator.AssertNotCalled(s.T(), "Validate", mock.Anything, mock.Anything)
-	s.mockService.AssertNotCalled(s.T(), "Create", mock.Anything, mock.Anything)
+func (s *UserHandlerSuite) TearDownTest() {
+	s.svc.AssertExpectations(s.T())
+	s.validator.AssertExpectations(s.T())
 }
 
-// 3. failed scenario: error validation
-func (s *UserHandlerSuite) TestRegisterUser_Failed_ValidationError() {
-	requestBody := dto.UserRequest{Username: "ri"}
+// ============================================================ GetMe
 
-	expectedErr := customerrors.NewValidationError(
-		`"username": "username must be at least 3 characters"`,
-	)
+func (s *UserHandlerSuite) TestGetMe_Success() {
+	s.svc.On("GetProfile", mock.Anything, "USR-1").
+		Return(&model.UserProfile{ID: "USR-1", Username: "riku", Role: entity.RoleAdmin}, nil).Once()
 
-	s.mockValidator.On("Validate", mock.Anything, mock.Anything).
-		Return(expectedErr).Once()
-
-	resp, err := s.app.Test(testingutils.MakeJSONRequest("POST", "/api/v1/auth/register", requestBody))
-
+	resp, err := s.app.Test(testingutils.MakeJSONRequest(fiber.MethodGet, "/users/me", nil))
 	s.Require().NoError(err)
-	s.Equal(fiber.StatusUnprocessableEntity, resp.StatusCode)
 
-	s.mockService.AssertNotCalled(s.T(), "Create", mock.Anything, mock.Anything)
-	s.mockValidator.AssertExpectations(s.T())
-}
-
-// 4. failed scenario: internal server error
-func (s *UserHandlerSuite) TestRegisterUser_Failed_InternalServerError() {
-	requestBody := dto.UserRequest{
-		Username: "riku",
-		Email:    "riku@mail.com",
-	}
-
-	s.mockValidator.On("Validate", mock.Anything, mock.Anything).Return(nil).Once()
-	s.mockService.On("Create", mock.Anything, mock.Anything).
-		Return(errors.New("failed to create user")).Once()
-
-	resp, err := s.app.Test(testingutils.MakeJSONRequest("POST", "/api/v1/auth/register", requestBody))
-
-	s.Require().NoError(err)
-	s.Equal(fiber.StatusInternalServerError, resp.StatusCode)
-
-	s.mockValidator.AssertExpectations(s.T())
-	s.mockService.AssertExpectations(s.T())
-}
-
-/////////////////// TEST REGISTER USER ///////////////////
-
-/////////////////// TEST GET PROFILE ///////////////////
-
-// 1. Success scenario
-func (s *UserHandlerSuite) TestGetProfile_Success() {
-	userID := "USER-123"
-	dummyUser := &dto.UserResponse{
-		Username: "riku",
-		Email:    "riku@mail.com",
-	}
-	dummyUser.ID = userID
-
-	s.mockService.On("GetProfile", mock.Anything, userID).Return(dummyUser, nil).Once()
-
-	req := testingutils.MakeJSONRequest("GET", "/api/v1/users/profile", nil)
-	req.Header.Set("X-Test-User-ID", userID)
-
-	resp, err := s.app.Test(req)
-
-	s.Require().NoError(err)
 	s.Equal(fiber.StatusOK, resp.StatusCode)
-	s.mockService.AssertExpectations(s.T())
+	data := testingutils.DecodeResponse(s.T(), resp).Data.(map[string]any)
+	s.Equal("riku", data["username"])
+	s.NotContains(data, "password")
 }
 
-// 2. failed scenario: user not found
-func (s *UserHandlerSuite) TestGetProfile_Failed_NotFound() {
-	userID := "USER-NOTFOUND"
-
-	s.mockService.On("GetProfile", mock.Anything, userID).Return(nil, customerrors.ErrDataNotFound).Once()
-
-	req := testingutils.MakeJSONRequest("GET", "/api/v1/users/profile", nil)
-	req.Header.Set("X-Test-User-ID", userID)
+func (s *UserHandlerSuite) TestGetMe_NotFound() {
+	req := testingutils.MakeJSONRequest(fiber.MethodGet, "/users/me", nil)
+	req.Header.Set("X-Test-User-ID", "USR-GONE")
+	s.svc.On("GetProfile", mock.Anything, "USR-GONE").Return(nil, apperror.NotFound("user not found")).Once()
 
 	resp, err := s.app.Test(req)
-
 	s.Require().NoError(err)
+
 	s.Equal(fiber.StatusNotFound, resp.StatusCode)
-	s.mockService.AssertExpectations(s.T())
 }
 
-// 3. failed scneario: internal server error
-func (s *UserHandlerSuite) TestGetProfile_Failed_InternalServerError() {
-	userID := "USER-123"
-	systemError := errors.New("database connection lost")
-
-	s.mockService.On("GetProfile", mock.Anything, userID).Return(nil, systemError).Once()
-
-	req := testingutils.MakeJSONRequest("GET", "/api/v1/users/profile", nil)
-	req.Header.Set("X-Test-User-ID", userID)
-
-	resp, err := s.app.Test(req)
-
+func (s *UserHandlerSuite) TestGetMe_WithoutIdentity_Returns401InsteadOfPanic() {
+	resp, err := s.app.Test(testingutils.MakeJSONRequest(fiber.MethodGet, "/public/me", nil))
 	s.Require().NoError(err)
-	s.Equal(fiber.StatusInternalServerError, resp.StatusCode)
-	s.mockService.AssertExpectations(s.T())
+
+	s.Equal(fiber.StatusUnauthorized, resp.StatusCode)
 }
 
-/////////////////// TEST GET PROFILE USER ///////////////////
+// ============================================================ List
+
+func (s *UserHandlerSuite) TestList_Success_WithMeta() {
+	s.validator.On("Validate", mock.Anything, mock.Anything).Return(nil).Once()
+	page := model.NewPage([]model.UserProfile{{ID: "USR-1"}, {ID: "USR-2"}}, 3, model.PageRequest{Page: 1, PageSize: 2})
+	s.svc.On("List", mock.Anything, model.PageRequest{Page: 1, PageSize: 2}).Return(&page, nil).Once()
+
+	resp, err := s.app.Test(testingutils.MakeJSONRequest(fiber.MethodGet, "/users?page=1&pageSize=2", nil))
+	s.Require().NoError(err)
+
+	s.Equal(fiber.StatusOK, resp.StatusCode)
+	body := testingutils.DecodeResponse(s.T(), resp)
+	s.Len(body.Data, 2)
+	meta := body.Meta.(map[string]any)
+	s.EqualValues(3, meta["totalRecords"])
+	s.EqualValues(2, meta["totalPages"])
+	s.Equal(true, meta["hasNext"])
+}

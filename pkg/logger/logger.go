@@ -1,3 +1,5 @@
+// Package logger builds the application's structured logger (log/slog) and
+// carries request-scoped loggers through context.Context.
 package logger
 
 import (
@@ -6,97 +8,97 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"runtime"
 	"strings"
-	"time"
-
-	"be-ayaka/config"
 
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// setupLogger initializes the logger with Lumberjack for log rotation
-func SetUp(cfg *config.Config) {
-	lumberjackLogger := &lumberjack.Logger{
-		Filename:   cfg.Log.FilePath,
-		MaxSize:    cfg.Log.MaxSize,    // megabytes
-		MaxBackups: cfg.Log.MaxBackups, // number of backups
-		MaxAge:     cfg.Log.MaxAge,     // days
-		Compress:   cfg.Log.Compress,   // whether to compress old logs
+// Options configures the logger.
+type Options struct {
+	Level  string // debug | info | warn | error
+	Format string // json | text
+	// Optional rotating log file, in addition to stdout.
+	FilePath   string
+	MaxSizeMB  int
+	MaxBackups int
+	MaxAgeDays int
+	Compress   bool
+	// Static attributes added to every record (app name, version, env...).
+	Attrs []slog.Attr
+}
+
+// New creates a logger. The returned io.Closer flushes/closes the log file (if any).
+func New(opts Options) (*slog.Logger, io.Closer, error) {
+	level, err := ParseLevel(opts.Level)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	multiWritter := io.MultiWriter(os.Stdout, lumberjackLogger)
-
-	opts := &slog.HandlerOptions{
-		AddSource: true,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			// timestamp format
-			if a.Key == slog.TimeKey {
-				a.Key = "timestamp"
-				a.Value = slog.StringValue(a.Value.Time().Format("2006-01-02 15:04:05"))
-			}
-
-			// msg -> message
-			if a.Key == slog.MessageKey {
-				a.Key = "message"
-			}
-
-			// source -> line
-			if a.Key == slog.SourceKey {
-				a.Key = "line"
-			}
-
-			// level -> level
-			if a.Key == slog.LevelKey {
-				a.Key = "level"
-			}
-
-			return a
-		},
-	}
-
-	// JSON handler
-	handler := slog.NewJSONHandler(multiWritter, opts)
-
-	// add App Name and Port
-	logger := slog.New(handler).With(
-		slog.String("app", cfg.App.Name),
-		slog.Int("port", cfg.Server.Port),
+	var (
+		w      io.Writer = os.Stdout
+		closer io.Closer = nopCloser{}
 	)
+	if opts.FilePath != "" {
+		lj := &lumberjack.Logger{
+			Filename:   opts.FilePath,
+			MaxSize:    opts.MaxSizeMB,
+			MaxBackups: opts.MaxBackups,
+			MaxAge:     opts.MaxAgeDays,
+			Compress:   opts.Compress,
+		}
+		w = io.MultiWriter(os.Stdout, lj)
+		closer = lj
+	}
 
-	slog.SetDefault(logger)
-}
+	handlerOpts := &slog.HandlerOptions{
+		Level:     level,
+		AddSource: level == slog.LevelDebug,
+	}
 
-// custom log for ayaka
-func Log(userID string, levelStr string, message string, requestId string) {
-	var level slog.Level
-	messageStr := fmt.Sprintf("[Request ID: %s] %s", requestId, message)
-
-	switch strings.ToUpper(levelStr) {
-	case "DEBUG":
-		level = slog.LevelDebug
-	case "INFO":
-		level = slog.LevelInfo
-	case "WARN":
-		level = slog.LevelWarn
-	case "ERROR":
-		level = slog.LevelError
+	var h slog.Handler
+	switch strings.ToLower(opts.Format) {
+	case "", "json":
+		h = slog.NewJSONHandler(w, handlerOpts)
+	case "text":
+		h = slog.NewTextHandler(w, handlerOpts)
 	default:
-		level = slog.LevelInfo
+		return nil, nil, fmt.Errorf("unknown log format %q (want json|text)", opts.Format)
 	}
 
-	// capture caller info
-	var pcs [1]uintptr
-	// skip 2 levels to get the caller of Log()
-	runtime.Callers(2, pcs[:])
-
-	// create a log record with caller info and user ID
-	record := slog.NewRecord(time.Now(), level, messageStr, pcs[0])
-
-	if userID != "" {
-		record.AddAttrs(slog.String("user_id", userID))
+	if len(opts.Attrs) > 0 {
+		h = h.WithAttrs(opts.Attrs)
 	}
-
-	// write the log record using the default logger's handler
-	_ = slog.Default().Handler().Handle(context.Background(), record)
+	return slog.New(h), closer, nil
 }
+
+// ParseLevel converts a level name into a slog.Level.
+func ParseLevel(s string) (slog.Level, error) {
+	var l slog.Level
+	if s == "" {
+		return slog.LevelInfo, nil
+	}
+	if err := l.UnmarshalText([]byte(s)); err != nil {
+		return 0, fmt.Errorf("invalid log level %q: %w", s, err)
+	}
+	return l, nil
+}
+
+type ctxKey struct{}
+
+// WithContext returns a copy of ctx that carries l.
+func WithContext(ctx context.Context, l *slog.Logger) context.Context {
+	return context.WithValue(ctx, ctxKey{}, l)
+}
+
+// FromContext returns the logger stored in ctx, or slog.Default().
+// Request-scoped loggers already contain request_id (and user_id once authenticated).
+func FromContext(ctx context.Context) *slog.Logger {
+	if l, ok := ctx.Value(ctxKey{}).(*slog.Logger); ok {
+		return l
+	}
+	return slog.Default()
+}
+
+type nopCloser struct{}
+
+func (nopCloser) Close() error { return nil }

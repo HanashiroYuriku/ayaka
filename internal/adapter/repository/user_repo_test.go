@@ -1,169 +1,148 @@
 package repository_test
 
 import (
-	"be-ayaka/internal/adapter/repository"
-	"be-ayaka/internal/core/customerrors"
-	"be-ayaka/internal/core/entity"
-	"be-ayaka/internal/core/port"
 	"context"
+	"fmt"
 	"testing"
+	"time"
+
+	"be-ayaka/internal/adapter/repository"
+	"be-ayaka/internal/core/apperror"
+	"be-ayaka/internal/core/entity"
+	"be-ayaka/internal/core/model"
 
 	"github.com/stretchr/testify/suite"
-	"gorm.io/gorm"
 )
 
 type UserRepoSuite struct {
 	BaseRepoSuite
-	repo port.UserRepository
-}
-
-func (s *UserRepoSuite) SetupSuite() {
-	s.BaseRepoSuite.SetupSuite()
-	s.repo = repository.NewUserRepo(s.DB)
+	repo *repository.UserRepo
+	ctx  context.Context
 }
 
 func TestUserRepoSuite(t *testing.T) {
-	suite.Run(t, &UserRepoSuite{
-		BaseRepoSuite: NewBaseRepoSuite(&entity.User{}),
-	})
+	suite.Run(t, &UserRepoSuite{BaseRepoSuite: NewBaseRepoSuite(&entity.User{})})
 }
 
-// =============================================================================
-// TEST FIND BY ID
-// =============================================================================
-func (s *UserRepoSuite) TestFindByID() {
-	ctx := context.Background()
+func (s *UserRepoSuite) SetupTest() {
+	s.BaseRepoSuite.SetupTest()
+	s.repo = repository.NewUserRepo(s.DB)
+	s.ctx = context.Background()
+}
 
-	dummy := &entity.User{
-		Username: "riku",
-		Email:    "riku@mail.com",
+func (s *UserRepoSuite) seed(users ...*entity.User) {
+	for _, u := range users {
+		s.Require().NoError(s.DB.Create(u).Error)
 	}
-	dummy.ID = "USER-1"
-	s.DB.Create(dummy)
+}
 
-	// 1. success scenario
-	s.Run("Success - Success find user", func() {
-		res, err := s.repo.FindByID(ctx, dummy.ID)
-		s.NoError(err)
+// ============================================================ FindByID
+
+func (s *UserRepoSuite) TestFindByID() {
+	s.seed(newUser("U-1", "riku"))
+
+	s.Run("found", func() {
+		res, err := s.repo.FindByID(s.ctx, "U-1")
+		s.Require().NoError(err)
 		s.Equal("riku", res.Username)
 	})
 
-	// 2. failed scenario: user not found
-	s.Run("Failed - ID User not found", func() {
-		res, err := s.repo.FindByID(ctx, "unknown")
-		s.Error(err)
+	s.Run("not found", func() {
+		res, err := s.repo.FindByID(s.ctx, "unknown")
 		s.Nil(res)
-		s.ErrorIs(err, customerrors.ErrDataNotFound)
+		s.ErrorIs(err, repository.ErrUserNotFound)
+		s.ErrorIs(err, apperror.ErrNotFound)
+	})
+
+	s.Run("soft deleted is not found", func() {
+		s.seed(newUser("U-DEL", "deleted"))
+		s.Require().NoError(s.DB.Delete(&entity.User{}, "id = ?", "U-DEL").Error)
+
+		_, err := s.repo.FindByID(s.ctx, "U-DEL")
+		s.ErrorIs(err, apperror.ErrNotFound)
 	})
 }
 
-// =============================================================================
-// TEST FIND BY EMAIL OR Username
-// =============================================================================
+// ============================================================ FindByEmail
 
 func (s *UserRepoSuite) TestFindByEmail() {
-	ctx := context.Background()
+	s.seed(newUser("U-1", "riku"))
 
-	dummy := &entity.User{
-		Username: "riku",
-		Email:    "riku@mail.com",
-	}
-	dummy.ID = "USER-001"
-	s.DB.Create(dummy)
+	res, err := s.repo.FindByEmail(s.ctx, "riku@mail.com")
+	s.Require().NoError(err)
+	s.Equal("U-1", res.ID)
 
-	// 1. success scenario using email
-	s.Run("Success - Find by email", func() {
-		res, err := s.repo.FindByEmail(ctx, "riku@mail.com")
-		s.NoError(err)
-		s.Equal("riku", res.Username)
-	})
-
-	// 2. failed scenario: user not found
-	s.Run("Failed - Not found", func() {
-		res, err := s.repo.FindByEmail(ctx, "unknown")
-		s.Error(err)
-		s.Nil(res)
-		s.ErrorIs(err, customerrors.ErrInvalidCredentials)
-	})
+	_, err = s.repo.FindByEmail(s.ctx, "ghost@mail.com")
+	s.ErrorIs(err, apperror.ErrNotFound)
 }
 
-// =============================================================================
-// TEST CREATE USER
-// =============================================================================
-// 1. success scenario
+// ============================================================ Create
+
 func (s *UserRepoSuite) TestCreate_Success() {
-	ctx := context.Background()
-	newUser := &entity.User{
-		Username: "hanashiroyuriku",
-		Email:    "yuriku@mail.com",
-		Password: "hashedpassword",
-	}
-	newUser.ID = "USER-123"
+	s.Require().NoError(s.repo.Create(s.ctx, newUser("U-1", "yuriku")))
 
-	err := s.repo.Create(ctx, newUser)
-	s.NoError(err)
-
-	var res entity.User
-	s.DB.First(&res, "id = ?", "USER-123")
-	s.Equal("hanashiroyuriku", res.Username)
+	res, err := s.repo.FindByID(s.ctx, "U-1")
+	s.Require().NoError(err)
 	s.Equal("yuriku@mail.com", res.Email)
 }
 
-// 2. success scenario with Tx
-func (s *UserRepoSuite) TestCreate_SuccessWithTx() {
+func (s *UserRepoSuite) TestCreate_DuplicateEmail_ReturnsConflict() {
+	s.seed(newUser("U-1", "riku"))
+	dup := newUser("U-2", "other")
+	dup.Email = "riku@mail.com"
+
+	err := s.repo.Create(s.ctx, dup)
+
+	s.ErrorIs(err, repository.ErrUserConflict)
+	s.ErrorIs(err, apperror.ErrConflict)
+}
+
+func (s *UserRepoSuite) TestCreate_RespectsTransactionInContext() {
 	tx := s.DB.Begin()
-	ctxWithTx := context.WithValue(context.Background(), repository.TxKey{}, tx)
+	ctx := repository.ContextWithTx(s.ctx, tx)
 
-	newUser := &entity.User{
-		Username: "riku",
-		Email:    "riku@mail.com",
-	}
-	newUser.ID = "USER-1"
-
-	err := s.repo.Create(ctxWithTx, newUser)
-	s.NoError(err)
-
+	s.Require().NoError(s.repo.Create(ctx, newUser("U-1", "riku")))
 	tx.Rollback()
 
-	var res entity.User
-	errFind := s.DB.First(&res, "id = ?", "USER-1").Error
-	s.Error(errFind)
-	s.Equal(gorm.ErrRecordNotFound, errFind)
+	_, err := s.repo.FindByID(s.ctx, "U-1")
+	s.ErrorIs(err, apperror.ErrNotFound)
 }
 
-// 3. failed scenario: email duplicate
-func (s *UserRepoSuite) TestCreate_Failed_DuplicateEmail() {
-	ctx := context.Background()
-
-	user1 := &entity.User{
-		Username: "user1",
-		Email:    "test@mail.com",
-	}
-	user1.ID = "U1"
-	s.DB.Create(user1)
-
-	user2 := &entity.User{
-		Username: "user2",
-		Email:    "test@mail.com",
-	}
-	user2.ID = "U2"
-
-	err := s.repo.Create(ctx, user2)
-	s.Error(err)
-	s.Contains(err.Error(), "UNIQUE constraint failed")
-}
-
-// 4. failed scenario: context canceled
-func (s *UserRepoSuite) TestCreate_Failed_ContextCanceled() {
-	ctx, cancel := context.WithCancel(context.Background())
+func (s *UserRepoSuite) TestCreate_ContextCanceled() {
+	ctx, cancel := context.WithCancel(s.ctx)
 	cancel()
 
-	newUser := &entity.User{
-		Username: "canceled",
-		Email:    "canceled@mail.com",
-	}
-	newUser.ID = "USER-CANCEL"
+	s.Error(s.repo.Create(ctx, newUser("U-1", "canceled")))
+}
 
-	err := s.repo.Create(ctx, newUser)
-	s.Error(err)
+// ============================================================ List
+
+func (s *UserRepoSuite) TestList_PaginatesNewestFirst() {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 1; i <= 5; i++ {
+		u := newUser(fmt.Sprintf("U-%d", i), fmt.Sprintf("user%d", i))
+		u.CreatedAt = base.Add(time.Duration(i) * time.Hour)
+		s.seed(u)
+	}
+
+	users, total, err := s.repo.List(s.ctx, model.PageRequest{Page: 1, PageSize: 2})
+	s.Require().NoError(err)
+	s.EqualValues(5, total)
+	s.Require().Len(users, 2)
+	s.Equal("U-5", users[0].ID)
+	s.Equal("U-4", users[1].ID)
+
+	users, _, err = s.repo.List(s.ctx, model.PageRequest{Page: 3, PageSize: 2})
+	s.Require().NoError(err)
+	s.Require().Len(users, 1)
+	s.Equal("U-1", users[0].ID)
+}
+
+func (s *UserRepoSuite) TestList_Empty() {
+	users, total, err := s.repo.List(s.ctx, model.PageRequest{Page: 1, PageSize: 10})
+
+	s.Require().NoError(err)
+	s.Zero(total)
+	s.NotNil(users)
+	s.Empty(users)
 }

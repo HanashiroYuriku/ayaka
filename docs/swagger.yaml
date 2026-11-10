@@ -1,0 +1,376 @@
+basePath: /
+definitions:
+  dto.LoginRequest:
+    properties:
+      email:
+        example: hanashiroyuriku@gmail.com
+        type: string
+      password:
+        example: P4$$word
+        maxLength: 72
+        type: string
+    required:
+    - email
+    - password
+    type: object
+  dto.PaginationMeta:
+    properties:
+      currentPage:
+        example: 1
+        type: integer
+      hasNext:
+        example: true
+        type: boolean
+      hasPrevious:
+        example: false
+        type: boolean
+      pageSize:
+        example: 20
+        type: integer
+      totalPages:
+        example: 3
+        type: integer
+      totalRecords:
+        example: 42
+        type: integer
+    type: object
+  dto.RefreshRequest:
+    properties:
+      refreshToken:
+        type: string
+    required:
+    - refreshToken
+    type: object
+  dto.RegisterRequest:
+    properties:
+      displayName:
+        example: Hanashiro Yuriku
+        maxLength: 100
+        type: string
+      email:
+        example: hanashiroyuriku@gmail.com
+        maxLength: 100
+        type: string
+      password:
+        example: P4$$word
+        type: string
+      username:
+        example: hanashiroyuriku
+        maxLength: 20
+        minLength: 3
+        type: string
+    required:
+    - email
+    - password
+    - username
+    type: object
+  dto.TokenResponse:
+    properties:
+      accessExpiresAt:
+        type: string
+      accessToken:
+        type: string
+      expiresIn:
+        description: seconds until the access token expires
+        example: 900
+        type: integer
+      refreshExpiresAt:
+        type: string
+      refreshToken:
+        type: string
+      tokenType:
+        example: Bearer
+        type: string
+    type: object
+  dto.UserResponse:
+    properties:
+      createdAt:
+        type: string
+      displayName:
+        example: Hanashiro Yuriku
+        type: string
+      email:
+        example: hanashiroyuriku@gmail.com
+        type: string
+      id:
+        example: USR-01932c7e6f2a7c3b9f1d2e3a4b5c6d7e
+        type: string
+      role:
+        example: user
+        type: string
+      username:
+        example: hanashiroyuriku
+        type: string
+    type: object
+  http.HealthResponse:
+    properties:
+      components:
+        additionalProperties:
+          type: string
+        type: object
+      name:
+        example: Ayaka Backend
+        type: string
+      status:
+        example: UP
+        type: string
+      time:
+        type: string
+      version:
+        example: v1.0.0
+        type: string
+    type: object
+  response.Response:
+    properties:
+      data: {}
+      errorField:
+        additionalProperties:
+          type: string
+        type: object
+      message:
+        example: OK
+        type: string
+      meta: {}
+      requestId:
+        example: REQ-01932c7e6f2a7c3b9f1d2e3a4b5c6d7e
+        type: string
+      status:
+        example: SUCCESS
+        type: string
+    type: object
+info:
+  contact: {}
+  description: Production-ready Go backend template (Fiber + GORM + PostgreSQL).
+  title: Ayaka Backend API
+  version: "1.0"
+paths:
+  /api/v1/auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Exchange email and password for an access/refresh token pair.
+      parameters:
+      - description: Login payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TokenResponse'
+              type: object
+        "401":
+          description: Invalid credentials
+          schema:
+            $ref: '#/definitions/response.Response'
+        "422":
+          description: Validation failed
+          schema:
+            $ref: '#/definitions/response.Response'
+        "429":
+          description: Rate limited
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: Login
+      tags:
+      - Auth
+  /api/v1/auth/refresh:
+    post:
+      consumes:
+      - application/json
+      description: Exchange a valid refresh token for a new access/refresh token pair.
+      parameters:
+      - description: Refresh payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.RefreshRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.TokenResponse'
+              type: object
+        "401":
+          description: Invalid or expired refresh token
+          schema:
+            $ref: '#/definitions/response.Response'
+        "422":
+          description: Validation failed
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: Refresh token
+      tags:
+      - Auth
+  /api/v1/auth/register:
+    post:
+      consumes:
+      - application/json
+      description: Create a new user account.
+      parameters:
+      - description: Register payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.UserResponse'
+              type: object
+        "400":
+          description: Malformed body
+          schema:
+            $ref: '#/definitions/response.Response'
+        "409":
+          description: Username or email already exists
+          schema:
+            $ref: '#/definitions/response.Response'
+        "422":
+          description: Validation failed
+          schema:
+            $ref: '#/definitions/response.Response'
+        "429":
+          description: Rate limited
+          schema:
+            $ref: '#/definitions/response.Response'
+      summary: Register
+      tags:
+      - Auth
+  /api/v1/users:
+    get:
+      description: Paginated list of users, newest first. Requires the admin role.
+      parameters:
+      - default: 1
+        description: Page number
+        in: query
+        minimum: 1
+        name: page
+        type: integer
+      - default: 20
+        description: Page size
+        in: query
+        maximum: 100
+        minimum: 1
+        name: pageSize
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/dto.UserResponse'
+                  type: array
+                meta:
+                  $ref: '#/definitions/dto.PaginationMeta'
+              type: object
+        "401":
+          description: Missing or invalid token
+          schema:
+            $ref: '#/definitions/response.Response'
+        "403":
+          description: Not an admin
+          schema:
+            $ref: '#/definitions/response.Response'
+        "422":
+          description: Invalid pagination parameters
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: List users
+      tags:
+      - Users
+  /api/v1/users/me:
+    get:
+      description: Get the profile of the authenticated user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.UserResponse'
+              type: object
+        "401":
+          description: Missing or invalid token
+          schema:
+            $ref: '#/definitions/response.Response'
+        "404":
+          description: User not found
+          schema:
+            $ref: '#/definitions/response.Response'
+      security:
+      - BearerAuth: []
+      summary: Current user
+      tags:
+      - Users
+  /livez:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/http.HealthResponse'
+      summary: Liveness probe
+      tags:
+      - System
+  /readyz:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/http.HealthResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/http.HealthResponse'
+      summary: Readiness probe
+      tags:
+      - System
+securityDefinitions:
+  BearerAuth:
+    description: Type "Bearer" followed by a space and the access token.
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

@@ -1,5 +1,8 @@
 package port
 
+import "context"
+
+// EmailSender delivers transactional emails.
 type EmailSender interface {
-	SendEmail(to, subject, htmlBody string) error
+	SendEmail(ctx context.Context, to, subject, htmlBody string) error
 }

@@ -1,40 +1,44 @@
 package repository_test
 
 import (
+	"fmt"
+
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/suite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
+// BaseRepoSuite gives every test a fresh in-memory SQLite database whose
+// schema is created from the given models.
+//
+// SQLite keeps the tests fast and dependency-free. For PostgreSQL-specific
+// behaviour (partial indexes, JSONB, ...) add integration tests against a
+// real database (e.g. testcontainers-go) behind a build tag.
 type BaseRepoSuite struct {
 	suite.Suite
 	DB     *gorm.DB
-	models []interface{}
+	models []any
 }
 
-func NewBaseRepoSuite(models ...interface{}) BaseRepoSuite {
-	return BaseRepoSuite{
-		models: models,
-	}
-}
-
-func (s *BaseRepoSuite) SetupSuite() {
-	dsn := "file::memory:?cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		s.T().Fatalf("Failed to initiate database RAM: %v", err)
-	}
-	s.DB = db
+func NewBaseRepoSuite(models ...any) BaseRepoSuite {
+	return BaseRepoSuite{models: models}
 }
 
 func (s *BaseRepoSuite) SetupTest() {
-	if len(s.models) > 0 {
-		s.DB.AutoMigrate(s.models...)
-	}
+	// A unique DSN per test gives full isolation between tests.
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", s.T().Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		TranslateError: true, // same as production
+		Logger:         logger.Discard,
+	})
+	s.Require().NoError(err)
+	s.Require().NoError(db.AutoMigrate(s.models...))
+	s.DB = db
 }
 
 func (s *BaseRepoSuite) TearDownTest() {
-	for _, model := range s.models {
-		s.DB.Migrator().DropTable(model)
+	if sqlDB, err := s.DB.DB(); err == nil {
+		_ = sqlDB.Close()
 	}
 }

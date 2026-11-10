@@ -2,34 +2,50 @@ package cmd
 
 import (
 	"fmt"
-	"log"
+	"os/signal"
+	"syscall"
 
-	"be-ayaka/config"
 	"be-ayaka/internal/bootstrap"
-	ayaka "be-ayaka/pkg/logger"
 
 	"github.com/spf13/cobra"
 )
 
-var serverCmd = &cobra.Command{
-	Use:     "service",
-	Aliases: []string{"svc"},
-	Short:   "Start the Ayaka backend service",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("🌸 Preparing Ayaka Server...")
+var migrateOnStart bool
 
-		// Step 1: Load configuration
-		cfg, err := config.LoadConfig()
+var serveCmd = &cobra.Command{
+	Use:     "serve",
+	Aliases: []string{"svc", "service"},
+	Short:   "Start the HTTP server",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		cfg, log, closer, err := setup()
 		if err != nil {
-			log.Fatalf("Failed to load config: %v", err)
+			return err
+		}
+		defer closer.Close()
+
+		// Cancelled on SIGINT/SIGTERM -> graceful shutdown.
+		ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+
+		app, err := bootstrap.New(ctx, cfg, log, bootstrap.Options{Migrate: migrateOnStart})
+		if err != nil {
+			return err
 		}
 
-		// Step 2: Set up logger
-		ayaka.SetUp(cfg)
-		ayaka.Log("SYSTEM", "INFO", "Config & Logger Already Loaded", "unknown-request-id")
-
-		// Step 3: Run bootstrap
-		ayaka.Log("SYSTEM", "WARN", "Preparing Bootstrap & Fiber", "unknown-request-id")
-		bootstrap.Run(cfg)
+		printBanner(cfg.Server.Port)
+		return app.Run(ctx)
 	},
+}
+
+func init() {
+	serveCmd.Flags().BoolVar(&migrateOnStart, "migrate", false, "apply pending database migrations before starting")
+}
+
+func printBanner(port int) {
+	fmt.Printf(`
+     ░█▀▀█ ░█──░█ ░█▀▀█ ░█─▄▀ ░█▀▀█
+     ▒█▄▄█ ░█▄▄▄█ ▒█▄▄█ ░█▀▄─ ▒█▄▄█
+     ▒█─▒█ ──░█── ▒█─▒█ ░█─░█ ▒█─▒█
+    Running on port %d
+`+"\n", port)
 }

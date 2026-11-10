@@ -1,16 +1,29 @@
+// Package dto contains the HTTP request/response payloads and their mapping
+// to and from the core models.
 package dto
 
-type UserRequest struct {
-	Username    string `json:"username" validate:"required,min=3,max=20,unique=users->username,whitespace,username" example:"hanashiroyuriku"`
-	Email       string `json:"email" validate:"required,max=100,email,unique=users->email,whitespace" example:"hanashiroyuriku@gmail.com"`
-	DisplayName string `json:"displayName" example:"Hanashiro Yuriku"`
-	Password    string `json:"password" validate:"required,complexpassword" example:"P4$$word"`
-}
+import (
+	"time"
+
+	"be-ayaka/internal/core/model"
+)
 
 type UserResponse struct {
-	ID       string `json:"id"`
-	Username string `json:"username"`
-	Email    string `json:"email" gorm:"unique"`
-	Password string `json:"-"`
-	Role     string `json:"role"`
+	ID          string    `json:"id" example:"USR-01932c7e6f2a7c3b9f1d2e3a4b5c6d7e"`
+	Username    string    `json:"username" example:"hanashiroyuriku"`
+	Email       string    `json:"email" example:"hanashiroyuriku@gmail.com"`
+	DisplayName string    `json:"displayName" example:"Hanashiro Yuriku"`
+	Role        string    `json:"role" example:"user"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+func NewUserResponse(p model.UserProfile) UserResponse {
+	return UserResponse{
+		ID:          p.ID,
+		Username:    p.Username,
+		Email:       p.Email,
+		DisplayName: p.DisplayName,
+		Role:        p.Role.String(),
+		CreatedAt:   p.CreatedAt.UTC(),
+	}
 }

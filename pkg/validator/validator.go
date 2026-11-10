@@ -1,309 +1,242 @@
+// Package validator wraps go-playground/validator with custom, database-aware
+// rules and converts failures into apperror values.
 package validator
 
 import (
-	"be-ayaka/internal/core/customerrors"
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode"
+
+	"be-ayaka/internal/core/apperror"
 
 	"github.com/go-playground/locales/en"
 	ut "github.com/go-playground/universal-translator"
 	"github.com/go-playground/validator/v10"
-	en_translations "github.com/go-playground/validator/v10/translations/en"
+	entranslations "github.com/go-playground/validator/v10/translations/en"
 	"gorm.io/gorm"
 )
 
-// Validator is an interface for validating data
+// Validator validates request payloads.
 type Validator interface {
-	Validate(ctx context.Context, data interface{}) error
-}
-
-// GoValidator is a struct that implements the Validator interface using go-playground/validator
-type GoValidator struct {
-	validate *validator.Validate
-	uni      ut.Translator
-	DB       *gorm.DB
-}
-
-// ValidationError is a custom error type for validation errors
-type ValidationError struct {
-	ErrorFields map[string]string `json:"errorFields,omitempty"`
-	IsConflict  bool              `json:"-"`
-	IsNotFound  bool              `json:"-"`
+	Validate(ctx context.Context, data any) error
 }
 
 var (
-	usernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
+	usernameRegex   = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
+	identifierRegex = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 )
 
-// NewGoValidator creates a new instance of GoValidator with custom validators and messages
-func NewGoValidator(db *gorm.DB) *GoValidator {
-	v := validator.New()
-	eng := en.New()
-	uni := ut.New(eng, eng)
-	trans, _ := uni.GetTranslator("en")
+const specialChars = `!@#$%^&*()_-+={[}]|\:;"'<,>.?/~` + "`"
 
-	en_translations.RegisterDefaultTranslations(v, trans)
+// GoValidator implements Validator using go-playground/validator.
+type GoValidator struct {
+	validate *validator.Validate
+	trans    ut.Translator
+	db       *gorm.DB
+	// softDelete caches whether a table has a deleted_at column.
+	softDelete sync.Map
+}
 
-	// register custom tag name function to use json tag instead of struct field name
-	v.RegisterTagNameFunc(func(fld reflect.StructField) string {
-		name := strings.SplitN(fld.Tag.Get("json"), ",", 2)[0]
-		if name == "-" {
-			return ""
+// New creates a validator. db may be nil when the DB-aware tags
+// (unique, incolumn) are not used, e.g. in unit tests.
+func New(db *gorm.DB) *GoValidator {
+	v := validator.New(validator.WithRequiredStructEnabled())
+	enLocale := en.New()
+	trans, _ := ut.New(enLocale, enLocale).GetTranslator("en")
+	_ = entranslations.RegisterDefaultTranslations(v, trans)
+
+	// Report JSON/query field names instead of Go struct field names.
+	v.RegisterTagNameFunc(func(f reflect.StructField) string {
+		for _, tag := range []string{"json", "query", "params", "form"} {
+			name := strings.SplitN(f.Tag.Get(tag), ",", 2)[0]
+			if name == "-" {
+				return ""
+			}
+			if name != "" {
+				return name
+			}
 		}
-		return name
+		return f.Name
 	})
 
-	gv := &GoValidator{validate: v, uni: trans, DB: db}
-	gv.registerCustomValidators()
-	gv.registerCustomMessages(trans)
-
+	gv := &GoValidator{validate: v, trans: trans, db: db}
+	gv.registerRules()
 	return gv
 }
 
-// registerCustomMessages registers custom error messages for validation tags
-func (v *GoValidator) registerCustomMessages(trans ut.Translator) {
-	// Override Required
-	v.validate.RegisterTranslation("required", trans, func(ut ut.Translator) error {
-		return ut.Add("required", "{0} is a required field", true)
-	}, func(ut ut.Translator, fe validator.FieldError) string {
-		return fmt.Sprintf("%s is a required field", toProperCase(fe.Field()))
-	})
-
-	// Override Email
-	v.validate.RegisterTranslation("email", trans, func(ut ut.Translator) error {
-		return ut.Add("email", "{0} must be a valid email address", true)
-	}, func(ut ut.Translator, fe validator.FieldError) string {
-		return fmt.Sprintf("%s must be a valid email address", toProperCase(fe.Field()))
-	})
-
-	// Override Min
-	v.validate.RegisterTranslation("min", trans, func(ut ut.Translator) error {
-		return ut.Add("min", "{0} must be at least {1} characters long", true)
-	}, func(ut ut.Translator, fe validator.FieldError) string {
-		return fmt.Sprintf("%s must be at least %s characters long", toProperCase(fe.Field()), fe.Param())
-	})
-}
-
-// registerCustomValidators registers custom validation functions and their corresponding error messages
-func (v *GoValidator) registerCustomValidators() {
-	v.validate.RegisterValidation("unique", v.uniqueValidator)
-	v.validate.RegisterValidation("incolumn", v.incolumnValidator)
-	v.validate.RegisterValidation("complexpassword", v.complexPasswordValidator)
-	v.validate.RegisterValidation("whitespace", v.whiteSpaceValidator)
-	v.validate.RegisterValidation("username", v.usernameValidator)
-
-	// unique
-	v.validate.RegisterTranslation("unique", v.uni, func(ut ut.Translator) error {
-		return ut.Add("unique", "{0} already exists", true)
-	}, func(ut ut.Translator, fe validator.FieldError) string {
-		return fmt.Sprintf("%s already exists", fe.Value().(string))
-	})
-
-	// incolumn
-	v.validate.RegisterTranslation("incolumn", v.uni, func(ut ut.Translator) error {
-		return ut.Add("incolumn", "{0} not found", true)
-	}, func(ut ut.Translator, fe validator.FieldError) string {
-		return fmt.Sprintf("%s does not exists", fe.Value().(string))
-	})
-
-	// complexpassword
-	v.validate.RegisterTranslation("complexpassword", v.uni, func(ut ut.Translator) error {
-		return ut.Add("complexpassword", "{0} not valid", true)
-	}, func(ut ut.Translator, fe validator.FieldError) string {
-		return "Password must be 8-64 characters long, contain: uppercase, lowercase, special character and number"
-	})
-
-	// username
-	v.validate.RegisterTranslation("username", v.uni, func(ut ut.Translator) error {
-		return ut.Add("username", "{0} can only contain letters, numbers, underscores, hyphens, and dots", true)
-	}, func(ut ut.Translator, fe validator.FieldError) string {
-		return fmt.Sprintf("%s can only contain letters, numbers, underscores, hyphens, and dots", toProperCase(fe.Field()))
-	})
-
-	// whitespace
-	v.validate.RegisterTranslation("whitespace", v.uni, func(ut ut.Translator) error {
-		return ut.Add("whitespace", "{0} cannot contain spaces", true)
-	}, func(ut ut.Translator, fe validator.FieldError) string {
-		return fmt.Sprintf("%s cannot contain spaces", toProperCase(fe.Field()))
-	})
-}
-
-// Custom validation functions
-func (v *GoValidator) uniqueValidator(fl validator.FieldLevel) bool {
-	params := strings.Split(fl.Param(), "->")
-	if len(params) != 2 {
-		return false
-	}
-
-	tableName := params[0]
-	fieldName := params[1]
-	fieldValue := fl.Field().String()
-
-	var count int64
-	err := v.DB.Table(tableName).Where(fmt.Sprintf("%s = ?", fieldName), fieldValue).Count(&count).Error
-	if err != nil {
-		return false
-	}
-
-	return count == 0
-}
-
-// incolumnValidator
-func (v *GoValidator) incolumnValidator(fl validator.FieldLevel) bool {
-	params := strings.Split(fl.Param(), "->")
-	if len(params) != 2 {
-		return false
-	}
-
-	tableName := params[0]
-	fieldName := params[1]
-	fieldValue := fl.Field().String()
-
-	if fieldValue == "" {
-		return true
-	}
-
-	var count int64
-	err := v.DB.Table(tableName).Where(fmt.Sprintf("%s = ?", fieldName), fieldValue).Count(&count).Error
-	if err != nil {
-		return false
-	}
-
-	return count != 0
-}
-
-// complexPasswordValidator
-func (v *GoValidator) complexPasswordValidator(fl validator.FieldLevel) bool {
-	password := fl.Field().String()
-	if len(password) < 8 || len(password) > 64 {
-		return false
-	}
-	var hasLower, hasUpper, hasNumber, hasSpecial bool
-	specialChars := `!@#$%^&*()_-+={[}]| \:;"'<,>.?/~`
-
-	for _, r := range password {
-		switch {
-		case unicode.IsLower(r):
-			hasLower = true
-		case unicode.IsUpper(r):
-			hasUpper = true
-		case unicode.IsDigit(r):
-			hasNumber = true
-		case strings.ContainsRune(specialChars, r):
-			hasSpecial = true
-		}
-
-		if hasLower && hasUpper && hasNumber && hasSpecial {
-			return true
-		}
-	}
-	return hasLower && hasUpper && hasNumber && hasSpecial
-}
-
-// whiteSpaceValidator
-func (v *GoValidator) whiteSpaceValidator(fl validator.FieldLevel) bool {
-	text := fl.Field().String()
-	return strings.IndexFunc(text, unicode.IsSpace) == -1
-}
-
-// username validator
-func (v *GoValidator) usernameValidator(fl validator.FieldLevel) bool {
-	username := fl.Field().String()
-
-	return usernameRegex.MatchString(username)
-}
-
-// Validate implements the Validator interface, validating the given data and returning a ValidationError if there are any validation errors
-func (v *GoValidator) Validate(ctx context.Context, data interface{}) error {
+// Validate validates data and returns:
+//   - apperror KindValidation (422) for format errors,
+//   - apperror KindConflict (409) when only `unique` rules failed,
+//   - apperror KindNotFound (404) when only `incolumn` rules failed.
+func (v *GoValidator) Validate(ctx context.Context, data any) error {
 	err := v.validate.StructCtx(ctx, data)
 	if err == nil {
 		return nil
 	}
 
-	if _, ok := err.(*validator.InvalidValidationError); ok {
-		return err
+	var vErrs validator.ValidationErrors
+	if !errors.As(err, &vErrs) {
+		return apperror.Internal(fmt.Errorf("validate: %w", err))
 	}
 
-	validationErrors := err.(validator.ValidationErrors)
-	if len(validationErrors) > 0 {
-		errorFields := make(map[string]string)
-		isConflict := false
-		isNotFound := false
-		hasFormatError := false
-
-		for _, err := range validationErrors {
-			switch err.Tag() {
-			case "unique":
-				isConflict = true
-			case "incolumn":
-				isNotFound = true
-			default:
-				hasFormatError = true
-			}
-			errorFields[err.Field()] = err.Translate(v.uni)
+	fields := make(map[string]string, len(vErrs))
+	var conflict, notFound, format bool
+	for _, fe := range vErrs {
+		switch fe.Tag() {
+		case "unique":
+			conflict = true
+		case "incolumn":
+			notFound = true
+		default:
+			format = true
 		}
-
-		var errMsgs []string
-		for field, msg := range errorFields {
-			errMsgs = append(errMsgs, fmt.Sprintf("%s: %s", field, msg))
+		if _, exists := fields[fe.Field()]; !exists {
+			fields[fe.Field()] = fe.Translate(v.trans)
 		}
-		detail := strings.Join(errMsgs, "; ")
-
-		// 422
-		if hasFormatError {
-			return customerrors.NewValidationError(detail)
-		}
-		// 404
-		if isNotFound {
-			return customerrors.NewNotFoundError(detail)
-		}
-		// 409
-		if isConflict {
-			return customerrors.NewConflictError(detail)
-		}
-
-		return customerrors.NewValidationError(detail)
 	}
-	return nil
+
+	switch {
+	case format:
+		return apperror.Validation(fields)
+	case notFound:
+		return apperror.ErrNotFound.WithFields(fields)
+	case conflict:
+		return apperror.ErrConflict.WithFields(fields)
+	}
+	return apperror.Validation(fields)
 }
 
-func (ve *ValidationError) Error() string {
-	var errMsgs []string
-	for field, msg := range ve.ErrorFields {
-		errMsgs = append(errMsgs, fmt.Sprintf("%s: %s", field, msg))
+func (v *GoValidator) registerRules() {
+	rules := []struct {
+		tag     string
+		fn      validator.FuncCtx
+		message string
+	}{
+		{"unique", v.unique, "{0} already exists"},
+		{"incolumn", v.inColumn, "{0} does not exist"},
+		{"complexpassword", complexPassword, "{0} must be 8-64 characters and contain uppercase, lowercase, number and special character"},
+		{"whitespace", noWhitespace, "{0} cannot contain spaces"},
+		{"username", username, "{0} can only contain letters, numbers, underscores, hyphens and dots"},
 	}
-	return strings.Join(errMsgs, "; ")
+	for _, r := range rules {
+		_ = v.validate.RegisterValidationCtx(r.tag, r.fn)
+		v.registerMessage(r.tag, r.message)
+	}
+
+	// Friendlier overrides of default messages.
+	v.registerMessage("required", "{0} is a required field")
+	v.registerMessage("email", "{0} must be a valid email address")
 }
 
-// Helper function to convert snake_case to Proper Case (for better error messages)
+func (v *GoValidator) registerMessage(tag, msg string) {
+	_ = v.validate.RegisterTranslation(tag, v.trans,
+		func(t ut.Translator) error { return t.Add(tag, msg, true) },
+		func(t ut.Translator, fe validator.FieldError) string {
+			s, _ := t.T(tag, toProperCase(fe.Field()), fe.Param())
+			return s
+		},
+	)
+}
+
+// unique=table->column: the value must not exist yet (soft-deleted rows ignored).
+func (v *GoValidator) unique(ctx context.Context, fl validator.FieldLevel) bool {
+	count, ok := v.count(ctx, fl)
+	return ok && count == 0
+}
+
+// incolumn=table->column: the value must exist (empty values are skipped; combine with required).
+func (v *GoValidator) inColumn(ctx context.Context, fl validator.FieldLevel) bool {
+	if fl.Field().String() == "" {
+		return true
+	}
+	count, ok := v.count(ctx, fl)
+	return ok && count > 0
+}
+
+func (v *GoValidator) count(ctx context.Context, fl validator.FieldLevel) (int64, bool) {
+	if v.db == nil {
+		panic("validator: unique/incolumn tags require a database connection")
+	}
+	table, column, found := strings.Cut(fl.Param(), "->")
+	// Table/column come from struct tags, but validate them anyway to make SQL
+	// injection impossible even if a tag is built dynamically.
+	if !found || !identifierRegex.MatchString(table) || !identifierRegex.MatchString(column) {
+		panic(fmt.Sprintf("validator: invalid table->column param %q", fl.Param()))
+	}
+
+	q := v.db.WithContext(ctx).Table(table).Where(column+" = ?", fl.Field().Interface())
+	if v.hasSoftDelete(table) {
+		q = q.Where("deleted_at IS NULL")
+	}
+
+	var count int64
+	if err := q.Count(&count).Error; err != nil {
+		return 0, false
+	}
+	return count, true
+}
+
+func (v *GoValidator) hasSoftDelete(table string) bool {
+	if cached, ok := v.softDelete.Load(table); ok {
+		return cached.(bool)
+	}
+	has := v.db.Migrator().HasColumn(table, "deleted_at")
+	v.softDelete.Store(table, has)
+	return has
+}
+
+func complexPassword(_ context.Context, fl validator.FieldLevel) bool {
+	password := fl.Field().String()
+	if n := len([]rune(password)); n < 8 || n > 64 {
+		return false
+	}
+	var lower, upper, digit, special bool
+	for _, r := range password {
+		switch {
+		case unicode.IsLower(r):
+			lower = true
+		case unicode.IsUpper(r):
+			upper = true
+		case unicode.IsDigit(r):
+			digit = true
+		case strings.ContainsRune(specialChars, r):
+			special = true
+		}
+	}
+	return lower && upper && digit && special
+}
+
+func noWhitespace(_ context.Context, fl validator.FieldLevel) bool {
+	return strings.IndexFunc(fl.Field().String(), unicode.IsSpace) == -1
+}
+
+func username(_ context.Context, fl validator.FieldLevel) bool {
+	return usernameRegex.MatchString(fl.Field().String())
+}
+
+// toProperCase converts "displayName" / "display_name" into "Display Name".
 func toProperCase(input string) string {
-	// snake case
 	input = strings.ReplaceAll(input, "_", " ")
 
-	// camel case
-	var spacedString strings.Builder
-	for i, r := range input {
-		if i > 0 && unicode.IsUpper(r) && input[i-1] != ' ' {
-			spacedString.WriteRune(' ')
+	var b strings.Builder
+	runes := []rune(input)
+	for i, r := range runes {
+		if i > 0 && unicode.IsUpper(r) && runes[i-1] != ' ' {
+			b.WriteRune(' ')
 		}
-		spacedString.WriteRune(r)
+		b.WriteRune(r)
 	}
 
-	// make first word capital
-	words := strings.Fields(spacedString.String())
-	for i, word := range words {
-		runes := []rune(word)
-		runes[0] = unicode.ToUpper(runes[0])
-
-		for j := 1; j < len(runes); j++ {
-			runes[j] = unicode.ToLower(runes[j])
-		}
-		words[i] = string(runes)
+	words := strings.Fields(b.String())
+	for i, w := range words {
+		rs := []rune(strings.ToLower(w))
+		rs[0] = unicode.ToUpper(rs[0])
+		words[i] = string(rs)
 	}
-
 	return strings.Join(words, " ")
 }
