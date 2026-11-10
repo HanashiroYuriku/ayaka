@@ -1,44 +1,42 @@
+# syntax=docker/dockerfile:1
+
 # ==========================================
-# STAGE 1: BUILD STAGE
+# STAGE 1: BUILD
 # ==========================================
-# Use an official Golang image as the build environment
 FROM golang:1.25-alpine AS builder
 
-# Set the working directory inside the container
-WORKDIR /app
+WORKDIR /src
 
-# Copy go.mod and go.sum files first to leverage Docker cache
+# Download dependencies first to leverage the layer cache.
 COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
-# Download all required dependencies (including Cobra and Viper)
-RUN go mod download
-
-# Copy the rest of the application source code
 COPY . .
 
-# Build the Golang application into a single binary named 'ayaka_app'
-RUN go build -o ayaka_app main.go
+# Static, stripped binary. Migrations and Swagger docs are embedded.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/ayaka .
 
 # ==========================================
-# STAGE 2: RUN STAGE
+# STAGE 2: RUNTIME
 # ==========================================
-# Use a fresh, lightweight Alpine image for the final runtime
-FROM alpine:latest
+FROM alpine:3.22
 
-RUN apk --no-cache add tzdata
+RUN apk add --no-cache ca-certificates tzdata wget \
+    && addgroup -S ayaka && adduser -S -G ayaka -H ayaka
 
 WORKDIR /app
+COPY --from=builder /out/ayaka /app/ayaka
+COPY config.yaml /app/config.yaml
 
-# Copy the compiled binary from the builder stage
-COPY --from=builder /app/ayaka_app .
+# Never run as root.
+USER ayaka
 
-# Copy configuration and environment files
-COPY config.yaml .
-#COPY .env .
-
-# Inform Docker that the application listens on port 8000
 EXPOSE 8000
 
-# START THE APPLICATION!
-# Note: This is equivalent to running 'go run main.go svc' in your terminal
-CMD ["./ayaka_app", "svc"]
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
+    CMD wget -qO- "http://127.0.0.1:${SERVER_PORT:-8000}/livez" >/dev/null || exit 1
+
+ENTRYPOINT ["/app/ayaka"]
+CMD ["serve"]

@@ -1,31 +1,41 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:16-alpine
     container_name: ayaka_postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: ${DATABASE_USER}
-      POSTGRES_PASSWORD: ${DATABASE_PASS}
-      POSTGRES_DB: ${DATABASE_NAME}
+      POSTGRES_USER: ${DATABASE_USER:-postgres}
+      POSTGRES_PASSWORD: ${DATABASE_PASS:?DATABASE_PASS is required}
+      POSTGRES_DB: ${DATABASE_NAME:-ayaka_db}
     ports:
-      - "${DATABASE_PORT}:5432"
+      - "${DATABASE_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     networks:
       - ayaka_network
 
   app:
     build: .
     container_name: ayaka_backend
-    ports:
-      - "${SERVER_PORT}:${SERVER_PORT}"
+    restart: unless-stopped
+    # Applies pending migrations, then starts the server.
+    command: ["serve", "--migrate"]
     env_file:
-      - .env             
+      - .env
     environment:
-      - DATABASE_HOST=db
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      SERVER_PORT: 8000
+    ports:
+      - "${SERVER_PORT:-8000}:8000"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     networks:
       - ayaka_network
 

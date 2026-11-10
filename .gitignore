@@ -1,7 +1,11 @@
 # Environment Variables
 .env
+.env.*
+!.env.sample
 
-# Build Executables
+# Build output
+/bin/
+/tmp/
 /main
 *.exe
 *.exe~
@@ -9,9 +13,19 @@
 *.so
 *.dylib
 be-ayaka
+ayaka
+
+# Test / coverage
 *.out
+*.test
+coverage.html
 
 # Logs
 *.log
 /logs/*
 !/logs/.keep
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json

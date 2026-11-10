@@ -1,55 +1,74 @@
-name: Ayaka Backend CI
+name: CI
 
 on:
   push:
-    branches: [ main, master, dev ]
+    branches: [main, master, dev]
   pull_request:
-    branches: [ main, master, dev ]
+    branches: [main, master, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  lint-and-test:
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      # Setup environment Go compiler
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          go-version: '1.25' # Match to your Go version
-          cache: true
+          go-version-file: go.mod
+      - name: Check formatting and generated files
+        run: |
+          test -z "$(gofmt -l .)" || (gofmt -l . && echo "run: make fmt" && exit 1)
+          go mod tidy && git diff --exit-code go.mod go.sum
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.5
 
-      # 3. Download dependencies
-      - name: Install Dependencies
-        run: go mod download
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Unit tests (race detector + coverage)
+        run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
 
-      # 4. Run Unit Test
-      - name: Run Unit Tests
-        env:
-          # Server
-          SERVER_PORT: '8000'
+  security:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
-          # Database Configuration (Aman karena testing kita pakai SQLite)
-          DATABASE_HOST: 'localhost'
-          DATABASE_PORT: '5432'
-          DATABASE_USER: 'postgres'
-          DATABASE_PASS: 'password'
-          DATABASE_NAME: 'ayaka_db'
-
-          # JWT Configuration
-          JWT_ACCESS_SECRET: 'ACCESS_SECRET_KEY'
-          JWT_ACCESS_EXPIRED: '24'
-          JWT_REFRESH_SECRET: 'REFRESH_SECRET_KEY'
-          JWT_REFRESH_EXPIRED: '10080'
-
-          # Frontend Config
-          FRONTEND_URL: 'http://localhost:3000'
-
-          # SMTP Configuration
-          SMTP_HOST: 'smtp.gmail.com'
-          SMTP_PORT: '587'
-          SMTP_USER: 'your@mail.com'
-          SMTP_PASS: 'YOURPASSWORD'
-        run: go test -v -coverprofile=coverage.txt ./...
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: ayaka:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,3 +1,14 @@
 .git/
+.github/
+.vscode/
+.idea/
 logs/
 tmp/
+bin/
+*.exe
+*.out
+coverage.*
+.env
+.env.*
+!.env.sample
+docker-compose*.yml
